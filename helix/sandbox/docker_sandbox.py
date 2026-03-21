@@ -9,6 +9,7 @@ never touch the host directly.
 import json
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import time
@@ -107,6 +108,7 @@ class DockerSandbox:
         self.data_dir = data_dir or Path.home() / ".helix" / "sandboxes"
         self.default_image = image or self._detect_host_image()
         self._docker_path: str | None = None
+        self._docker_group_wrap = False
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
@@ -142,8 +144,16 @@ class DockerSandbox:
             if result.returncode == 0:
                 return True
 
-            # Docker installed but permission denied — fix it
+            # Docker installed but permission denied — try group wrapper first
             if "permission denied" in result.stderr.lower():
+                if shutil.which("sg"):
+                    sg_result = subprocess.run(
+                        ["sg", "docker", "-c", f"{shlex.quote(docker_path)} info"],
+                        capture_output=True, text=True, timeout=15,
+                    )
+                    if sg_result.returncode == 0:
+                        self._docker_group_wrap = True
+                        return True
                 return self._fix_docker_permissions(docker_path)
 
             return False
@@ -196,6 +206,15 @@ class DockerSandbox:
             if result.returncode != 0:
                 # Try auto-fixing permissions before giving up
                 if "permission denied" in result.stderr.lower():
+                    if shutil.which("sg"):
+                        sg_result = subprocess.run(
+                            ["sg", "docker", "-c", f"{shlex.quote(docker_path)} info"],
+                            capture_output=True, text=True, timeout=15,
+                        )
+                        if sg_result.returncode == 0:
+                            self._docker_group_wrap = True
+                            self._docker_path = docker_path
+                            return docker_path
                     if self._fix_docker_permissions(docker_path):
                         self._docker_path = docker_path
                         return docker_path
@@ -218,15 +237,37 @@ class DockerSandbox:
         cmd = [docker_path] + args
         logger.debug(f"Running: {' '.join(cmd)}")
 
-        # Use sg to run with docker group if permissions were fixed this session
-        if getattr(self, "_docker_group_wrap", False):
-            shell_cmd = " ".join(cmd)
+        def run_with_sg() -> subprocess.CompletedProcess:
+            quoted = " ".join(shlex.quote(part) for part in cmd)
             return subprocess.run(
-                ["sg", "docker", "-c", shell_cmd],
-                capture_output=True, text=True, timeout=timeout, check=check,
+                ["sg", "docker", "-c", quoted],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
             )
 
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=check)
+        # If we already know this session needs sg wrapping, use it directly.
+        if getattr(self, "_docker_group_wrap", False) and shutil.which("sg"):
+            result = run_with_sg()
+            if check and result.returncode != 0:
+                raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+            return result
+
+        # Try direct docker command first
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+        
+        # If permission denied and sg is available, retry with sg docker
+        if "permission denied" in result.stderr.lower() and shutil.which("sg"):
+            logger.debug("Docker permission denied, retrying with sg docker...")
+            self._docker_group_wrap = True
+            result = run_with_sg()
+        
+        # Handle check=True after potential retry
+        if check and result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+        
+        return result
 
     def _container_name(self, name: str) -> str:
         return f"{self.CONTAINER_PREFIX}{name}"
