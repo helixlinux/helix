@@ -170,6 +170,7 @@ class HelixCLI:
         dry_run: bool = False,
         parallel: bool = False,
         json_output: bool = False,
+        sandbox: bool | None = None,
     ):
         # Initialize installation history
         history = InstallationHistory()
@@ -284,6 +285,52 @@ class HelixCLI:
                     print(f"  Command: {step.command}")
 
                 print(f"\nExecuting installation...")
+
+                # ── Sandbox execution path ──
+                use_sandbox = sandbox
+                if use_sandbox is not False:
+                    try:
+                        from helix.sandbox.docker_sandbox import DockerSandbox
+                        ds = DockerSandbox()
+                        if ds.check_docker():
+                            if not json_output:
+                                cx_print("[sandbox] Docker detected. Testing in container first...", "info")
+                            sandbox_result = ds.test_and_promote(
+                                commands=commands,
+                                packages=packages,
+                                dry_run=False,
+                            )
+                            if sandbox_result.success:
+                                self._print_success(f"{software} installed successfully (sandbox-verified)")
+                                total_dur = (datetime.now() - start_time).total_seconds()
+                                print(f"\nCompleted in {total_dur:.2f} seconds")
+                                if install_id:
+                                    history.update_installation(install_id, InstallationStatus.SUCCESS)
+                                    print(f"\n📝 Installation recorded (ID: {install_id})")
+                                return 0
+                            else:
+                                if use_sandbox is True:
+                                    # User explicitly requested sandbox — fail
+                                    error_msg = f"Sandbox failed: {sandbox_result.message}"
+                                    if install_id:
+                                        history.update_installation(install_id, InstallationStatus.FAILED, error_msg)
+                                    self._print_error(error_msg)
+                                    if sandbox_result.test_results:
+                                        for tr in sandbox_result.test_results:
+                                            print(f"  {tr.result.value}: {tr.name} — {tr.message}")
+                                    return 1
+                                else:
+                                    # Auto mode — warn and fall through to direct execution
+                                    cx_print(f"[sandbox] Test failed ({sandbox_result.message}). Falling back to direct install.", "warning")
+                        elif use_sandbox is True:
+                            self._print_error("Docker not available. Install Docker or use --no-sandbox.")
+                            return 1
+                        else:
+                            cx_print("[info] Docker not found. Running without sandbox.", "info")
+                    except ImportError:
+                        if use_sandbox is True:
+                            self._print_error("Sandbox module not available.")
+                            return 1
 
                 if parallel:
                     import asyncio
@@ -572,6 +619,43 @@ class HelixCLI:
                 import traceback
 
                 traceback.print_exc()
+            return 1
+
+    # ─── sandbox ─────────────────────────────────────────────────────────
+
+    def sandbox(self, action: str | None = None):
+        """Manage Docker sandbox environments."""
+        from helix.sandbox.docker_sandbox import DockerSandbox
+
+        ds = DockerSandbox()
+
+        if action == "status":
+            available = ds.check_docker()
+            if available:
+                cx_print("Docker: available", "success")
+            else:
+                cx_print("Docker: not found", "error")
+                cx_print("Install: https://docs.docker.com/get-docker/", "info")
+
+            sandboxes = ds.list_sandboxes()
+            if sandboxes:
+                print(f"\nActive sandboxes: {len(sandboxes)}")
+                for sb in sandboxes:
+                    print(f"  {sb.name} ({sb.state.value}) — {sb.image} — {', '.join(sb.packages) or 'no packages'}")
+            else:
+                print("\nNo active sandboxes.")
+            return 0
+
+        elif action == "cleanup":
+            count = ds.cleanup_all()
+            if count:
+                cx_print(f"Removed {count} sandbox(es)", "success")
+            else:
+                cx_print("No sandboxes to clean up", "info")
+            return 0
+
+        else:
+            print("Usage: helix sandbox {status|cleanup}")
             return 1
 
     # ─── stack ──────────────────────────────────────────────────────────
@@ -1243,6 +1327,17 @@ def main():
         action="store_true",
         help="Enable parallel execution for multi-step installs",
     )
+    install_parser.add_argument(
+        "--sandbox",
+        action="store_true",
+        default=None,
+        help="Require Docker sandbox (test in container before installing on host)",
+    )
+    install_parser.add_argument(
+        "--no-sandbox",
+        action="store_true",
+        help="Skip Docker sandbox even if available",
+    )
 
     # ── Resolve command ──
     resolve_parser = subparsers.add_parser(
@@ -1373,6 +1468,12 @@ def main():
         "--verbose", "-v", action="store_true", help="Show verbose test output"
     )
 
+    # ── Sandbox command ──
+    sandbox_parser = subparsers.add_parser("sandbox", help="Manage Docker sandbox environments")
+    sandbox_sub = sandbox_parser.add_subparsers(dest="sandbox_action")
+    sandbox_sub.add_parser("status", help="Show Docker availability and active sandboxes")
+    sandbox_sub.add_parser("cleanup", help="Remove all sandbox containers")
+
     # Wizard
     subparsers.add_parser("wizard", help="Run the first-run setup wizard (API key configuration)")
 
@@ -1400,11 +1501,18 @@ def main():
         if args.command == "ask":
             return cli.ask(args.question)
         elif args.command == "install":
+            # Resolve sandbox flag: --sandbox=True, --no-sandbox=None(False), default=None(auto)
+            sandbox_flag = None
+            if getattr(args, "sandbox", False):
+                sandbox_flag = True
+            elif getattr(args, "no_sandbox", False):
+                sandbox_flag = False
             return cli.install(
                 args.software,
                 execute=args.execute,
                 dry_run=args.dry_run,
                 parallel=args.parallel,
+                sandbox=sandbox_flag,
             )
         elif args.command == "resolve":
             return cli.resolve(args)
@@ -1420,6 +1528,8 @@ def main():
             return cli.uninstall(args.software, execute=args.execute, dry_run=args.dry_run)
         elif args.command == "daemon":
             return cli.daemon(args)
+        elif args.command == "sandbox":
+            return cli.sandbox(getattr(args, "sandbox_action", None))
         elif args.command == "wizard":
             from helix.first_run_wizard import FirstRunWizard
             wizard = FirstRunWizard()

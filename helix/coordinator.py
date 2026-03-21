@@ -9,6 +9,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+from helix.sandbox.command_validator import CommandValidator
 from helix.validators import DANGEROUS_PATTERNS
 
 logger = logging.getLogger(__name__)
@@ -60,13 +61,20 @@ class InstallationCoordinator:
         enable_rollback: bool = False,
         log_file: str | None = None,
         progress_callback: Callable[[int, int, InstallationStep], None] | None = None,
+        sandbox=None,
     ):
-        """Initialize an installation run with optional logging and rollback."""
+        """Initialize an installation run with optional logging and rollback.
+
+        Args:
+            sandbox: Optional DockerSandbox instance for sandboxed execution.
+        """
         self.timeout = timeout
         self.stop_on_error = stop_on_error
         self.enable_rollback = enable_rollback
         self.log_file = log_file
         self.progress_callback = progress_callback
+        self.sandbox = sandbox
+        self._validator = CommandValidator()
 
         if descriptions and len(descriptions) != len(commands):
             raise ValueError("Number of descriptions must match number of commands")
@@ -151,11 +159,11 @@ class InstallationCoordinator:
         if not command or not command.strip():
             return False, "Empty command"
 
-        # Check for dangerous patterns
-        for pattern in DANGEROUS_PATTERNS:
-            if re.search(pattern, command, re.IGNORECASE):
-                logger.warning(f"Dangerous command pattern blocked: {pattern}")
-                return False, "Command blocked: matches dangerous pattern"
+        # Use CommandValidator allowlist/blocklist
+        allowed, reason = self._validator.validate(command)
+        if not allowed:
+            logger.warning(f"Command blocked by validator: {reason}")
+            return False, reason
 
         return True, None
 
