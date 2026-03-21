@@ -945,6 +945,222 @@ class HelixCLI:
                 traceback.print_exc()
             return 1
 
+    def daemon(self, args: argparse.Namespace) -> int:
+        """Handle daemon commands: install, uninstall, config, reload-config, version, ping, shutdown, run-tests."""
+        action = getattr(args, "daemon_action", None)
+
+        if action == "install":
+            return self._daemon_install(args)
+        elif action == "uninstall":
+            return self._daemon_uninstall(args)
+        elif action == "config":
+            return self._daemon_config()
+        elif action == "reload-config":
+            return self._daemon_reload_config()
+        elif action == "version":
+            return self._daemon_version()
+        elif action == "ping":
+            return self._daemon_ping()
+        elif action == "shutdown":
+            return self._daemon_shutdown()
+        elif action == "run-tests":
+            return self._daemon_run_tests(args)
+        else:
+            cx_print("Usage: helix daemon <command>", "info")
+            return 0
+
+    def _daemon_install(self, args: argparse.Namespace) -> int:
+        """Install and enable the daemon systemd service."""
+        cx_print("🔧 Daemon Installation", "info")
+        
+        if not args.execute:
+            cx_print("Dry run: daemon installation would proceed with the following steps:", "warning")
+            cx_print("  1. Copy helixd binary to /usr/local/bin/", "info")
+            cx_print("  2. Copy helixd.service to /etc/systemd/system/", "info")
+            cx_print("  3. Create /run/helix directory", "info")
+            cx_print("  4. Enable and start helixd service", "info")
+            cx_print("Run with --execute to actually install the daemon", "warning")
+            return 0
+        
+        # Run the actual installation script
+        try:
+            import subprocess
+            cx_print("Installing helixd daemon...", "info")
+            script_path = os.path.join(os.path.dirname(__file__), "../daemon/scripts/install.sh")
+            result = subprocess.run(["sudo", "bash", script_path], check=True)
+            cx_print("Daemon installed successfully!", "success")
+            return 0
+        except Exception as e:
+            self._print_error(f"Failed to install daemon: {str(e)}")
+            return 1
+
+    def _daemon_uninstall(self, args: argparse.Namespace) -> int:
+        """Stop and remove the daemon systemd service."""
+        cx_print("🗑️  Daemon Uninstallation", "info")
+        
+        if not args.execute:
+            cx_print("Dry run: daemon uninstallation would proceed with the following steps:", "warning")
+            cx_print("  1. Stop the helixd service", "info")
+            cx_print("  2. Disable the helixd service", "info")
+            cx_print("  3. Remove helixd binary from /usr/local/bin/", "info")
+            cx_print("  4. Remove helixd.service from /etc/systemd/system/", "info")
+            cx_print("Run with --execute to actually uninstall the daemon", "warning")
+            return 0
+        
+        # Run the actual uninstallation script
+        try:
+            import subprocess
+            cx_print("Uninstalling helixd daemon...", "info")
+            script_path = os.path.join(os.path.dirname(__file__), "../daemon/scripts/install.sh")
+            result = subprocess.run(["sudo", "bash", script_path, "uninstall"], check=True)
+            cx_print("Daemon uninstalled successfully!", "success")
+            return 0
+        except Exception as e:
+            self._print_error(f"Failed to uninstall daemon: {str(e)}")
+            return 1
+
+    def _daemon_config(self) -> int:
+        """Get and display current daemon configuration via IPC."""
+        try:
+            from helix.daemon_client import DaemonClient, DaemonConnectionError, DaemonNotInstalledError
+            
+            client = DaemonClient()
+            response = client.config_get()
+            
+            if not response.success:
+                self._print_error(f"Failed to get daemon config: {response.error}")
+                return 1
+            
+            cx_print("📋 Daemon Configuration", "info")
+            console.print(f"[bold]Socket Path:[/bold] {response.result.get('socket_path')}")
+            console.print(f"[bold]Socket Backlog:[/bold] {response.result.get('socket_backlog')}")
+            console.print(f"[bold]Socket Timeout (ms):[/bold] {response.result.get('socket_timeout_ms')}")
+            console.print(f"[bold]Max Requests/sec:[/bold] {response.result.get('max_requests_per_sec')}")
+            console.print(f"[bold]Log Level:[/bold] {response.result.get('log_level')}")
+            return 0
+            
+        except DaemonNotInstalledError as e:
+            self._print_error(str(e))
+            return 1
+        except DaemonConnectionError as e:
+            self._print_error(str(e))
+            return 1
+
+    def _daemon_reload_config(self) -> int:
+        """Reload daemon configuration from disk via IPC."""
+        try:
+            from helix.daemon_client import DaemonClient, DaemonConnectionError, DaemonNotInstalledError
+            
+            client = DaemonClient()
+            response = client.config_reload()
+            
+            if not response.success:
+                self._print_error(f"Failed to reload daemon config: {response.error}")
+                return 1
+            
+            cx_print("✅ Daemon configuration reloaded successfully", "success")
+            return 0
+            
+        except DaemonNotInstalledError as e:
+            self._print_error(str(e))
+            return 1
+        except DaemonConnectionError as e:
+            self._print_error(str(e))
+            return 1
+
+    def _daemon_version(self) -> int:
+        """Get daemon version information via IPC."""
+        try:
+            from helix.daemon_client import DaemonClient, DaemonConnectionError, DaemonNotInstalledError
+            
+            client = DaemonClient()
+            response = client.version()
+            
+            if not response.success:
+                self._print_error(f"Failed to get daemon version: {response.error}")
+                return 1
+            
+            cx_print(f"{response.result.get('name')} {response.result.get('version')}", "success")
+            return 0
+            
+        except DaemonNotInstalledError as e:
+            self._print_error(str(e))
+            return 1
+        except DaemonConnectionError as e:
+            self._print_error(str(e))
+            return 1
+
+    def _daemon_ping(self) -> int:
+        """Test daemon connectivity via IPC."""
+        try:
+            from helix.daemon_client import DaemonClient, DaemonConnectionError, DaemonNotInstalledError
+            
+            client = DaemonClient()
+            response = client.ping()
+            
+            if not response.success:
+                self._print_error(f"Daemon ping failed: {response.error}")
+                return 1
+            
+            cx_print("✅ Daemon is running and responding", "success")
+            return 0
+            
+        except DaemonNotInstalledError as e:
+            self._print_error(str(e))
+            return 1
+        except DaemonConnectionError as e:
+            self._print_error(str(e))
+            return 1
+
+    def _daemon_shutdown(self) -> int:
+        """Request daemon shutdown via IPC."""
+        try:
+            from helix.daemon_client import DaemonClient, DaemonConnectionError, DaemonNotInstalledError
+            
+            client = DaemonClient()
+            response = client.shutdown()
+            
+            if not response.success:
+                self._print_error(f"Failed to shutdown daemon: {response.error}")
+                return 1
+            
+            cx_print("✅ Daemon shutdown initiated", "success")
+            return 0
+            
+        except DaemonNotInstalledError as e:
+            self._print_error(str(e))
+            return 1
+        except DaemonConnectionError as e:
+            self._print_error(str(e))
+            return 1
+
+    def _daemon_run_tests(self, args: argparse.Namespace) -> int:
+        """Run daemon test suite."""
+        try:
+            import subprocess
+            cx_print("🧪 Running Daemon Tests", "info")
+            
+            # Determine which tests to run
+            cmd = ["bash", os.path.join(os.path.dirname(__file__), "../daemon/scripts/build.sh")]
+            
+            if getattr(args, "unit", False):
+                cmd.append("--unit")
+            elif getattr(args, "integration", False):
+                cmd.append("--integration")
+            
+            if getattr(args, "test", None):
+                cmd.extend(["-t", args.test])
+            
+            if getattr(args, "verbose", False):
+                cmd.append("-v")
+            
+            result = subprocess.run(cmd, check=False)
+            return result.returncode
+            
+        except Exception as e:
+            self._print_error(f"Failed to run daemon tests: {str(e)}")
+            return 1
+
 
 # ─── help display ───────────────────────────────────────────────────────
 
@@ -1102,6 +1318,61 @@ def main():
     uninstall_parser.add_argument("--execute", action="store_true", help="Execute removal (dry-run is default)")
     uninstall_parser.add_argument("--dry-run", action="store_true", help="Show commands only (default)")
 
+    # ── Daemon command ──
+    daemon_parser = subparsers.add_parser("daemon", help="Manage the helixd background daemon")
+    daemon_subs = daemon_parser.add_subparsers(dest="daemon_action", help="Daemon actions")
+
+    # daemon install [--execute]
+    daemon_install_parser = daemon_subs.add_parser(
+        "install", help="Install and enable the daemon service"
+    )
+    daemon_install_parser.add_argument(
+        "--execute", action="store_true", help="Actually run the installation"
+    )
+
+    # daemon uninstall [--execute]
+    daemon_uninstall_parser = daemon_subs.add_parser(
+        "uninstall", help="Stop and remove the daemon service"
+    )
+    daemon_uninstall_parser.add_argument(
+        "--execute", action="store_true", help="Actually run the uninstallation"
+    )
+
+    # daemon config - uses config.get IPC handler
+    daemon_subs.add_parser("config", help="Show current daemon configuration")
+
+    # daemon reload-config - uses config.reload IPC handler
+    daemon_subs.add_parser("reload-config", help="Reload daemon configuration from disk")
+
+    # daemon version - uses version IPC handler
+    daemon_subs.add_parser("version", help="Show daemon version")
+
+    # daemon ping - uses ping IPC handler
+    daemon_subs.add_parser("ping", help="Test daemon connectivity")
+
+    # daemon shutdown - uses shutdown IPC handler
+    daemon_subs.add_parser("shutdown", help="Request daemon shutdown")
+
+    # daemon run-tests - run daemon test suite
+    daemon_run_tests_parser = daemon_subs.add_parser(
+        "run-tests",
+        help="Run daemon test suite (runs all tests by default when no filters are provided)",
+    )
+    daemon_run_tests_parser.add_argument("--unit", action="store_true", help="Run only unit tests")
+    daemon_run_tests_parser.add_argument(
+        "--integration", action="store_true", help="Run only integration tests"
+    )
+    daemon_run_tests_parser.add_argument(
+        "--test",
+        "-t",
+        type=str,
+        metavar="NAME",
+        help="Run a specific test (e.g., test_config, test_daemon)",
+    )
+    daemon_run_tests_parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Show verbose test output"
+    )
+
     # Wizard
     subparsers.add_parser("wizard", help="Run the first-run setup wizard (API key configuration)")
 
@@ -1147,6 +1418,8 @@ def main():
             return cli.rollback(args.id, args.dry_run)
         elif args.command == "uninstall":
             return cli.uninstall(args.software, execute=args.execute, dry_run=args.dry_run)
+        elif args.command == "daemon":
+            return cli.daemon(args)
         elif args.command == "wizard":
             from helix.first_run_wizard import FirstRunWizard
             wizard = FirstRunWizard()
