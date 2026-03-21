@@ -49,6 +49,9 @@ class HardwareContextProvider:
                 "is_wireless": net.is_wireless,
                 "speed_mbps": net.speed_mbps,
                 "mac_address": net.mac_address,
+                "vendor": net.vendor,
+                "chipset": net.chipset,
+                "pci_slot": net.pci_slot,
             }
             if include_volatile:
                 item["ip_address"] = net.ip_address
@@ -69,6 +72,9 @@ class HardwareContextProvider:
                 "distro_version": info.distro_version,
                 "kernel_version": info.kernel_version,
                 "virtualization": info.virtualization,
+                "is_online": info.is_online,
+                "is_vpn": info.is_vpn,
+                "connection_quality": info.connection_quality,
                 **({"uptime_seconds": info.uptime_seconds} if include_volatile else {}),
             },
             "cpu": {
@@ -98,9 +104,14 @@ class HardwareContextProvider:
             "capabilities": {
                 "has_nvidia_gpu": info.has_nvidia_gpu,
                 "has_amd_gpu": info.has_amd_gpu,
+                "has_intel_gpu": info.has_intel_gpu,
                 "cuda_available": info.cuda_available,
                 "rocm_available": info.rocm_available,
+                "gpu_mode": info.gpu_mode,
+                "is_hybrid_system": info.is_hybrid_system,
+                "render_offload_available": info.render_offload_available,
             },
+            "proxy": info.proxy,
         }
 
     @classmethod
@@ -147,6 +158,10 @@ class HardwareContextProvider:
 
             lines.append(f"CUDA available: {bool(caps.get('cuda_available'))}")
             lines.append(f"ROCm available: {bool(caps.get('rocm_available'))}")
+            if caps.get("gpu_mode"):
+                lines.append(f"GPU mode: {caps.get('gpu_mode')}")
+            if caps.get("is_hybrid_system") is not None:
+                lines.append(f"Hybrid GPU system: {bool(caps.get('is_hybrid_system'))}")
 
             lines.append(f"RAM: {memory.get('total_gb', 0)} GB")
             if include_volatile and memory.get("available_gb") is not None:
@@ -160,6 +175,12 @@ class HardwareContextProvider:
 
             if system.get("virtualization"):
                 lines.append(f"Virtualization: {system['virtualization']}")
+            if system.get("is_online") is not None:
+                lines.append(f"Online: {bool(system.get('is_online'))}")
+            if system.get("is_vpn") is not None:
+                lines.append(f"VPN: {bool(system.get('is_vpn'))}")
+            if system.get("connection_quality"):
+                lines.append(f"Network quality: {system['connection_quality']}")
 
             return "\n".join(lines)
         except Exception as e:

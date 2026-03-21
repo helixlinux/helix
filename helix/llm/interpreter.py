@@ -144,6 +144,9 @@ Rules:
 - Use apt for Ubuntu packages
 - Add sudo for system commands
 - Choose packages compatible with the system hardware below
+- Hardware context is already provided below. Do NOT add probing commands such as
+    lspci, lsusb, lshw, inxi, nvidia-smi, uname, or dmidecode unless the user
+    explicitly asks to diagnose/detect hardware.
 - Combine multiple pip packages into ONE pip install command
 - Combine multiple apt packages into ONE apt install command
 - NEVER repeat the same package or command
@@ -174,6 +177,9 @@ Rules:
    - If CUDA is not available, prefer CPU-only alternatives
    - If ROCm is available, prefer AMD GPU packages over NVIDIA ones
    - Consider available RAM and disk space for large packages
+10. Hardware context is already provided below. Do NOT add hardware-discovery
+    commands (lspci, lsusb, lshw, inxi, nvidia-smi, uname, dmidecode) unless
+    the user explicitly asks for diagnostics or hardware discovery.
 
 Format:
 {"commands": ["command1", "command2", ...]}

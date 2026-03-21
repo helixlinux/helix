@@ -34,6 +34,16 @@ class GPUVendor(Enum):
     UNKNOWN = "unknown"
 
 
+class GPUMode(Enum):
+    """GPU operation modes for hybrid systems."""
+
+    INTEGRATED = "integrated"
+    HYBRID = "hybrid"
+    NVIDIA = "nvidia"
+    COMPUTE = "compute"
+    UNKNOWN = "unknown"
+
+
 class CPUVendor(Enum):
     """CPU vendors."""
 
@@ -126,6 +136,9 @@ class NetworkInfo:
     mac_address: str = ""
     speed_mbps: int = 0
     is_wireless: bool = False
+    vendor: str = ""
+    chipset: str = ""
+    pci_slot: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -150,9 +163,19 @@ class SystemInfo:
     # Capabilities
     has_nvidia_gpu: bool = False
     has_amd_gpu: bool = False
+    has_intel_gpu: bool = False
     cuda_available: bool = False
     rocm_available: bool = False
+    gpu_mode: str = GPUMode.UNKNOWN.value
+    is_hybrid_system: bool = False
+    render_offload_available: bool = False
     virtualization: str = ""  # kvm, vmware, docker, none
+
+    # Network state (proxy/VPN/connectivity)
+    proxy: dict[str, str] = field(default_factory=dict)
+    is_vpn: bool = False
+    is_online: bool = False
+    connection_quality: str = "unknown"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -168,9 +191,17 @@ class SystemInfo:
             "network": [n.to_dict() for n in self.network],
             "has_nvidia_gpu": self.has_nvidia_gpu,
             "has_amd_gpu": self.has_amd_gpu,
+            "has_intel_gpu": self.has_intel_gpu,
             "cuda_available": self.cuda_available,
             "rocm_available": self.rocm_available,
+            "gpu_mode": self.gpu_mode,
+            "is_hybrid_system": self.is_hybrid_system,
+            "render_offload_available": self.render_offload_available,
             "virtualization": self.virtualization,
+            "proxy": self.proxy,
+            "is_vpn": self.is_vpn,
+            "is_online": self.is_online,
+            "connection_quality": self.connection_quality,
         }
 
 
@@ -202,6 +233,22 @@ class HardwareDetector:
             return uname_fn()
         return platform.uname()
 
+    def _run_command(self, cmd: list[str], timeout: int = 5) -> tuple[int, str, str]:
+        """Run a command and return (returncode, stdout, stderr)."""
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            return result.returncode, result.stdout.strip(), result.stderr.strip()
+        except FileNotFoundError:
+            return 127, "", "command not found"
+        except Exception as e:
+            logger.debug(f"Command failed ({' '.join(cmd)}): {e}")
+            return 1, "", str(e)
+
     def detect(self, force_refresh: bool = False) -> SystemInfo:
         """
         Detect all hardware information.
@@ -224,9 +271,11 @@ class HardwareDetector:
         self._detect_system(info)
         self._detect_cpu(info)
         self._detect_gpu(info)
+        self._detect_gpu_mode(info)
         self._detect_memory(info)
         self._detect_storage(info)
         self._detect_network(info)
+        self._detect_network_state(info)
         self._detect_virtualization(info)
 
         # Cache results
@@ -362,24 +411,44 @@ class HardwareDetector:
                             mac_address=net_data.get("mac_address", ""),
                             speed_mbps=int(net_data.get("speed_mbps", 0) or 0),
                             is_wireless=bool(net_data.get("is_wireless", False)),
+                            vendor=net_data.get("vendor", ""),
+                            chipset=net_data.get("chipset", ""),
+                            pci_slot=net_data.get("pci_slot", ""),
                         )
                     )
 
                 # Capabilities
                 gpu_has_nvidia = any(g.vendor == GPUVendor.NVIDIA for g in info.gpu)
                 gpu_has_amd = any(g.vendor == GPUVendor.AMD for g in info.gpu)
+                gpu_has_intel = any(g.vendor == GPUVendor.INTEL for g in info.gpu)
 
                 # Prefer derived flags from parsed GPU list; only fall back to cached
                 # booleans if cache did not include GPU entries.
                 if info.gpu:
                     info.has_nvidia_gpu = gpu_has_nvidia
                     info.has_amd_gpu = gpu_has_amd
+                    info.has_intel_gpu = gpu_has_intel
                 else:
                     info.has_nvidia_gpu = bool(data.get("has_nvidia_gpu", False))
                     info.has_amd_gpu = bool(data.get("has_amd_gpu", False))
+                    info.has_intel_gpu = bool(data.get("has_intel_gpu", False))
                 info.cuda_available = bool(data.get("cuda_available", False))
                 info.rocm_available = bool(data.get("rocm_available", False))
+                info.gpu_mode = data.get("gpu_mode", GPUMode.UNKNOWN.value)
+                info.is_hybrid_system = bool(
+                    data.get(
+                        "is_hybrid_system",
+                        info.has_nvidia_gpu and (info.has_intel_gpu or info.has_amd_gpu),
+                    )
+                )
+                info.render_offload_available = bool(data.get("render_offload_available", False))
                 info.virtualization = data.get("virtualization", "")
+
+                cached_proxy = data.get("proxy", {})
+                info.proxy = cached_proxy if isinstance(cached_proxy, dict) else {}
+                info.is_vpn = bool(data.get("is_vpn", False))
+                info.is_online = bool(data.get("is_online", False))
+                info.connection_quality = data.get("connection_quality", "unknown")
 
                 return info
 
@@ -485,12 +554,16 @@ class HardwareDetector:
         """Detect GPU information."""
         # Try lspci for basic detection
         try:
-            result = subprocess.run(["lspci", "-nn"], capture_output=True, text=True, timeout=5)
+            rc, stdout, _ = self._run_command(["lspci", "-nn"], timeout=5)
+            if rc != 0:
+                raise RuntimeError("lspci failed")
 
-            for line in result.stdout.split("\n"):
+            for line in stdout.split("\n"):
                 parsed = self._parse_lspci_gpu_line(line, info)
                 if parsed is not None:
                     info.gpu.append(parsed)
+
+            info.has_intel_gpu = any(g.vendor == GPUVendor.INTEL for g in info.gpu)
 
         except Exception as e:
             logger.debug(f"lspci GPU detection failed: {e}")
@@ -505,10 +578,11 @@ class HardwareDetector:
 
     def _parse_lspci_gpu_line(self, line: str, info: SystemInfo) -> "GPUInfo | None":
         """Parse a single `lspci -nn` line into a GPUInfo if it looks like a GPU entry."""
-        if "VGA" not in line and "3D" not in line and "Display" not in line:
+        line_lower = line.lower()
+        if "vga" not in line_lower and "3d" not in line_lower and "display" not in line_lower:
             return None
 
-        gpu = GPUInfo()
+        gpu = GPUInfo(model=self._extract_lspci_name(line))
 
         pci_match = re.search(r"\[([0-9a-fA-F]{4}:[0-9a-fA-F]{4})\]", line)
         if pci_match:
@@ -519,33 +593,59 @@ class HardwareDetector:
         if vendor_from_pci == GPUVendor.NVIDIA:
             gpu.vendor = GPUVendor.NVIDIA
             info.has_nvidia_gpu = True
-            gpu.model = self._extract_gpu_model(line, "NVIDIA")
+            if not gpu.model or gpu.model == "Unknown":
+                gpu.model = self._extract_gpu_model(line, "NVIDIA")
             return gpu
         if vendor_from_pci == GPUVendor.AMD:
             gpu.vendor = GPUVendor.AMD
             info.has_amd_gpu = True
-            gpu.model = self._extract_gpu_model(line, "AMD")
+            if not gpu.model or gpu.model == "Unknown":
+                gpu.model = self._extract_gpu_model(line, "AMD")
             return gpu
         if vendor_from_pci == GPUVendor.INTEL:
             gpu.vendor = GPUVendor.INTEL
-            gpu.model = self._extract_gpu_model(line, "INTEL")
+            if not gpu.model or gpu.model == "Unknown":
+                gpu.model = self._extract_gpu_model(line, "INTEL")
             return gpu
 
-        upper = line.upper()
-        # Fallback textual matching (word boundaries prevent false ATI matches in 'compatible').
-        if re.search(r"\bNVIDIA\b", upper):
+        # Fallback textual matching (word boundaries prevent false matches in 'compatible').
+        if re.search(r"\bnvidia\b", line_lower):
             gpu.vendor = GPUVendor.NVIDIA
             info.has_nvidia_gpu = True
-            gpu.model = self._extract_gpu_model(line, "NVIDIA")
-        elif re.search(r"\bAMD\b", upper) or re.search(r"\bATI\b", upper):
+        elif (
+            re.search(r"\bamd\b", line_lower)
+            or re.search(r"\bati\b", line_lower)
+            or re.search(r"\bradeon\b", line_lower)
+        ):
             gpu.vendor = GPUVendor.AMD
             info.has_amd_gpu = True
-            gpu.model = self._extract_gpu_model(line, "AMD")
-        elif re.search(r"\bINTEL\b", upper):
+        elif re.search(r"\bintel\b", line_lower):
             gpu.vendor = GPUVendor.INTEL
-            gpu.model = self._extract_gpu_model(line, "INTEL")
+            info.has_intel_gpu = True
+        else:
+            gpu.vendor = GPUVendor.UNKNOWN
+
+        if not gpu.model or gpu.model == "Unknown":
+            if gpu.vendor == GPUVendor.NVIDIA:
+                gpu.model = self._extract_gpu_model(line, "NVIDIA")
+            elif gpu.vendor == GPUVendor.AMD:
+                gpu.model = self._extract_gpu_model(line, "AMD")
+            elif gpu.vendor == GPUVendor.INTEL:
+                gpu.model = self._extract_gpu_model(line, "INTEL")
 
         return gpu
+
+    def _extract_lspci_name(self, line: str) -> str:
+        """Extract a friendly GPU name from an lspci line."""
+        try:
+            match = re.search(r"(?:VGA|3D|Display)[^:]*:\s*(.+?)(?:\s*\[|$)", line, re.IGNORECASE)
+            if match:
+                name = match.group(1).strip()
+                name = name.replace("Corporation", "").strip()
+                return name
+        except Exception as e:
+            logger.debug(f"lspci name extraction failed: {e}")
+        return "Unknown"
 
     def _gpu_vendor_from_pci_id(self, pci_id: str) -> GPUVendor:
         """Infer GPU vendor from PCI ID (vendor:device)."""
@@ -604,6 +704,60 @@ class HardwareDetector:
             logger.debug("nvidia-smi not found")
         except Exception as e:
             logger.debug(f"NVIDIA detection failed: {e}")
+
+    def _detect_gpu_mode(self, info: SystemInfo):
+        """Detect current GPU mode using common Linux switching tools."""
+        mode = GPUMode.UNKNOWN
+
+        # Method 1: prime-select
+        rc, out, _ = self._run_command(["prime-select", "query"], timeout=3)
+        if rc == 0:
+            profile = out.strip().lower()
+            if profile == "nvidia":
+                mode = GPUMode.NVIDIA
+            elif profile in ("intel", "integrated"):
+                mode = GPUMode.INTEGRATED
+            elif profile in ("on-demand", "hybrid"):
+                mode = GPUMode.HYBRID
+
+        # Method 2: envycontrol
+        if mode == GPUMode.UNKNOWN:
+            rc, out, _ = self._run_command(["envycontrol", "--query"], timeout=3)
+            if rc == 0:
+                detected = out.strip().lower()
+                if "nvidia" in detected:
+                    mode = GPUMode.NVIDIA
+                elif "integrated" in detected or "intel" in detected:
+                    mode = GPUMode.INTEGRATED
+                elif "hybrid" in detected:
+                    mode = GPUMode.HYBRID
+
+        # Method 3: system76-power
+        if mode == GPUMode.UNKNOWN:
+            rc, out, _ = self._run_command(["system76-power", "graphics"], timeout=3)
+            if rc == 0:
+                detected = out.strip().lower()
+                if "nvidia" in detected:
+                    mode = GPUMode.NVIDIA
+                elif "integrated" in detected or "intel" in detected:
+                    mode = GPUMode.INTEGRATED
+                elif "hybrid" in detected:
+                    mode = GPUMode.HYBRID
+
+        # Heuristic fallback for hybrid systems
+        info.is_hybrid_system = bool(info.has_nvidia_gpu and (info.has_intel_gpu or info.has_amd_gpu))
+        if mode == GPUMode.UNKNOWN and info.is_hybrid_system:
+            mode = GPUMode.HYBRID
+
+        info.gpu_mode = mode.value
+        info.render_offload_available = bool(
+            info.is_hybrid_system
+            and (
+                Path("/usr/bin/prime-run").exists()
+                or Path("/usr/bin/nvidia-offload").exists()
+                or mode == GPUMode.HYBRID
+            )
+        )
 
     def _detect_amd_details(self, info: SystemInfo):
         """Detect AMD-specific GPU details."""
@@ -705,11 +859,63 @@ class HardwareDetector:
                 except Exception:
                     pass
 
-                if net.ip_address:  # Only add if has IP
-                    info.network.append(net)
+                # Enrich with chipset/vendor from PCI slot when available
+                self._enrich_network_chipset(net, iface_dir)
+
+                # Keep interface entries even if IP is currently unset.
+                # This preserves WiFi capability visibility on disconnected systems.
+                info.network.append(net)
 
         except Exception as e:
             logger.debug(f"Network detection failed: {e}")
+
+    def _enrich_network_chipset(self, net: NetworkInfo, iface_dir: Path):
+        """Populate network vendor/chipset metadata from PCI-backed interfaces."""
+        try:
+            dev_path = (iface_dir / "device").resolve()
+            slot = dev_path.name
+            if re.match(r"^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$", slot, re.IGNORECASE):
+                net.pci_slot = slot
+                rc, out, _ = self._run_command(["lspci", "-nn", "-s", slot], timeout=2)
+                if rc == 0 and out:
+                    line = out.splitlines()[0]
+
+                    # Example: "3d:00.0 Network controller: Intel Corporation Wi-Fi 6 AX201 [8086:... ]"
+                    name_match = re.search(r":\s*(.+?)(?:\s*\[[0-9a-fA-F]{4}:[0-9a-fA-F]{4}\]|$)", line)
+                    if name_match:
+                        chipset = name_match.group(1).strip().replace("Corporation", "").strip()
+                        net.chipset = chipset
+
+                    low = line.lower()
+                    if "intel" in low:
+                        net.vendor = "intel"
+                    elif "qualcomm" in low or "atheros" in low:
+                        net.vendor = "qualcomm"
+                    elif "broadcom" in low:
+                        net.vendor = "broadcom"
+                    elif "realtek" in low:
+                        net.vendor = "realtek"
+                    elif "mediatek" in low or "ralink" in low:
+                        net.vendor = "mediatek"
+        except Exception as e:
+            logger.debug(f"Network chipset enrichment failed for {net.interface}: {e}")
+
+    def _detect_network_state(self, info: SystemInfo):
+        """Detect proxy, VPN, connectivity, and network quality."""
+        try:
+            from helix.network_config import NetworkConfig
+
+            net_cfg = NetworkConfig(auto_detect=True)
+            info.proxy = net_cfg.proxy or {}
+            info.is_vpn = bool(net_cfg.is_vpn)
+            info.is_online = bool(net_cfg.is_online)
+            # Keep cheap default if quality wasn't explicitly measured.
+            if net_cfg.connection_quality and net_cfg.connection_quality != "unknown":
+                info.connection_quality = net_cfg.connection_quality
+            else:
+                info.connection_quality = "offline" if not info.is_online else "unknown"
+        except Exception as e:
+            logger.debug(f"Network state detection failed: {e}")
 
     def _detect_virtualization(self, info: SystemInfo):
         """Detect if running in virtualized environment."""
