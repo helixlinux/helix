@@ -150,7 +150,7 @@ void Handlers::register_all(IPCServer& server) {
         return handle_shutdown(req);
     });
     
-    LOG_INFO("Handlers", "Registered 7 IPC handlers");
+    LOG_INFO("Handlers", "Registered 8 IPC handlers");
 }
 
 Response Handlers::handle_ping(const Request& /*req*/) {

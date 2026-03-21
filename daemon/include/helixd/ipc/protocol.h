@@ -68,24 +68,15 @@
      
      // Alert management
      constexpr const char* ALERTS = "alerts";
-     constexpr const char* ALERTS_GET = "alerts.get";
-     constexpr const char* ALERTS_ACK = "alerts.acknowledge";
-     constexpr const char* ALERTS_DISMISS = "alerts.dismiss";
-    constexpr const char* SECURITY_PATCHES_INSTALL = "security.patches.install";
+     constexpr const char* SECURITY_PATCHES_INSTALL = "security.patches.install";
      
      // Configuration
      constexpr const char* CONFIG_GET = "config.get";
      constexpr const char* CONFIG_RELOAD = "config.reload";
-     
-     // LLM operations
-     constexpr const char* LLM_STATUS = "llm.status";
-     constexpr const char* LLM_LOAD = "llm.load";
-     constexpr const char* LLM_UNLOAD = "llm.unload";
-     constexpr const char* LLM_INFER = "llm.infer";
 
      // Package management
      constexpr const char* PACKAGES_ANALYZE = "packages.analyze";
-
+     
      // Daemon control
      constexpr const char* SHUTDOWN = "shutdown";
      constexpr const char* PING = "ping";

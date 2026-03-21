@@ -1501,6 +1501,12 @@ class HelixCLI:
             response = client.analyze_packages()
 
             if not response.success:
+                if "Method not found: packages.analyze" in (response.error or ""):
+                    self._print_error(
+                        "Your running helixd daemon is outdated and does not support analyze-packages. "
+                        "Rebuild and reinstall helixd, then restart the service."
+                    )
+                    return 1
                 self._print_error(f"Package analysis failed: {response.error}")
                 return 1
 
