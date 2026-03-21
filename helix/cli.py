@@ -161,6 +161,87 @@ class HelixCLI:
             self._print_error(str(e))
             return 1
 
+    # ─── install confirmation ────────────────────────────────────────────
+
+    def _confirm_commands(self, commands: list[str], prompt: str = "") -> tuple[str, list[str] | str]:
+        """
+        Prompt user to confirm, edit, regenerate, or discard commands.
+        Returns ('proceed', commands), ('edited', edited_commands),
+                ('discard', commands), or ('regenerate', detail_str).
+        """
+        original_commands = list(commands)
+
+        try:
+            answer = input("\nProceed with installation? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            return ("discard", commands)
+
+        if answer in ("y", "yes"):
+            return ("proceed", commands)
+
+        # Show 3 options
+        print()
+        print("  [e] Edit       - Open nano to edit the commands")
+        print("  [r] Regenerate - Send back to AI for better commands")
+        print("  [d] Discard    - Cancel installation")
+        print()
+
+        try:
+            choice = input("Choice [e/r/d]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            return ("discard", commands)
+
+        if choice == "e":
+            import os
+            import subprocess
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".sh", delete=False, prefix="helix_cmds_"
+            ) as f:
+                tmp_path = f.name
+                f.write("# Edit the commands below. One command per line.\n")
+                f.write("# Lines starting with # are ignored. Save and close to continue.\n\n")
+                for cmd in commands:
+                    f.write(cmd + "\n")
+
+            try:
+                subprocess.run(["nano", tmp_path])
+                with open(tmp_path) as f:
+                    edited = [
+                        line.strip()
+                        for line in f.readlines()
+                        if line.strip() and not line.strip().startswith("#")
+                    ]
+            except FileNotFoundError:
+                cx_print("nano not found. Keeping original commands.", "warning")
+                edited = list(original_commands)
+            finally:
+                os.unlink(tmp_path)
+
+            if not edited:
+                cx_print("No commands after editing. Installation discarded.", "warning")
+                return ("discard", commands)
+
+            print("\nEdited commands:")
+            for i, cmd in enumerate(edited, 1):
+                print(f"  {i}. {cmd}")
+            return ("edited", edited)
+
+        elif choice == "r":
+            try:
+                detail = input("\nDescribe what's wrong or add more detail: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nCancelled.")
+                return ("discard", commands)
+            return ("regenerate", detail)
+
+        else:
+            cx_print("Installation discarded.", "info")
+            return ("discard", commands)
+
     # ─── install ────────────────────────────────────────────────────────
 
     def install(
@@ -259,6 +340,41 @@ class HelixCLI:
             print("\nGenerated commands:")
             for i, cmd in enumerate(commands, 1):
                 print(f"  {i}. {cmd}")
+
+            # Confirmation loop (runs for both dry-run and execute)
+            edit_id: int | None = None
+            original_commands = list(commands)
+            while True:
+                action, result = self._confirm_commands(commands, prompt=software)
+
+                if action == "proceed":
+                    commands = result
+                    break
+                elif action == "edited":
+                    edited_commands = result
+                    edit_id = history.save_edit(
+                        software, original_commands, edited_commands, was_installed=False
+                    )
+                    commands = edited_commands
+                    break
+                elif action == "discard":
+                    return 0
+                elif action == "regenerate":
+                    detail = result
+                    cx_print("Regenerating commands...", "info")
+                    try:
+                        commands = interpreter.parse(
+                            f"install {software}. Additional context: {detail}"
+                        )
+                    except Exception as e:
+                        self._print_error(f"Failed to regenerate: {e}")
+                        return 1
+                    if not commands:
+                        self._print_error("No commands generated")
+                        return 1
+                    print("\nRegenerated commands:")
+                    for i, cmd in enumerate(commands, 1):
+                        print(f"  {i}. {cmd}")
 
             if dry_run or not execute:
                 print(f"\n(Dry-run completed. Use --execute to apply changes.)")
@@ -378,6 +494,8 @@ class HelixCLI:
                             if install_id:
                                 history.update_installation(install_id, InstallationStatus.SUCCESS)
                                 print(f"\n📝 Installation recorded (ID: {install_id})")
+                                if edit_id and edit_id > 0:
+                                    history.mark_edit_installed(edit_id)
 
                             return 0
 
@@ -437,6 +555,8 @@ class HelixCLI:
                     if install_id:
                         history.update_installation(install_id, InstallationStatus.SUCCESS)
                         print(f"\n📝 Installation recorded (ID: {install_id})")
+                        if edit_id and edit_id > 0:
+                            history.mark_edit_installed(edit_id)
 
                     return 0
                 else:
@@ -915,6 +1035,128 @@ class HelixCLI:
 
         return 0
 
+    # ─── edits ──────────────────────────────────────────────────────────
+
+    def _run_edited_commands(self, edit: dict) -> int:
+        """Execute commands from a saved edit entry."""
+        import datetime
+
+        commands = edit["edited_cmds"]
+        software = edit["prompt"]
+        history = InstallationHistory()
+        start_time = datetime.datetime.now()
+
+        install_id = history.record_installation(
+            InstallationType.INSTALL, [], commands, start_time
+        )
+
+        def progress_callback(current, total, step):
+            status_emoji = "⏳"
+            if step.status == StepStatus.SUCCESS:
+                status_emoji = "✅"
+            elif step.status == StepStatus.FAILED:
+                status_emoji = "❌"
+            print(f"\n[{current}/{total}] {status_emoji} {step.description}")
+            print(f"  Command: {step.command}")
+
+        coordinator = InstallationCoordinator(
+            commands=commands,
+            descriptions=[f"Step {i + 1}" for i in range(len(commands))],
+            timeout=300,
+            stop_on_error=True,
+            progress_callback=progress_callback,
+        )
+
+        result = coordinator.execute()
+
+        if result.success:
+            self._print_success(f"Installation complete")
+            if install_id:
+                history.update_installation(install_id, InstallationStatus.SUCCESS)
+                history.mark_edit_installed(edit["id"])
+            return 0
+        else:
+            self._print_error("Installation failed")
+            if install_id:
+                history.update_installation(
+                    install_id,
+                    InstallationStatus.FAILED,
+                    result.error_message,
+                )
+            return 1
+
+    def edits(self, limit: int = 20) -> int:
+        """Browse edited command history with arrow-key navigation."""
+        import sys
+        import termios
+        import tty
+
+        history = InstallationHistory()
+        edit_list = history.get_edits(limit)
+
+        if not edit_list:
+            cx_print("No edit history found.", "info")
+            return 0
+
+        idx = 0
+
+        def show_edit(e: dict) -> None:
+            console.print()
+            cx_header(f"Edit #{e['id']}  —  {e['timestamp'][:19].replace('T', ' ')}")
+            console.print(f"[bold]Prompt:[/bold]  {e['prompt']}")
+            status_str = "[green]Installed[/green]" if e["was_installed"] else "[yellow]Not installed[/yellow]"
+            console.print(f"[bold]Status:[/bold]  {status_str}")
+            console.print(f"[bold]Record:[/bold]  {idx + 1} / {len(edit_list)}")
+            console.print()
+            console.print("[bold yellow]NOTE:[/bold yellow] The commands listed below will be executed if you press [bold]Y[/bold] and if want exit press [bold]Q[/bold] .")
+            console.print()
+            console.print("[bold]Commands:[/bold]")
+            for i, cmd in enumerate(e["edited_cmds"], 1):
+                console.print(f"  {i}. {cmd}")
+            console.print()
+            console.print(
+                "[dim]  ↑  previous  |  ↓  next [/dim]"
+            )
+
+        def getch() -> str:
+            fd = sys.stdin.fileno()
+            old = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                ch = sys.stdin.read(1)
+                if ch == "\x1b":
+                    ch2 = sys.stdin.read(2)
+                    return ch + ch2
+                return ch
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+        show_edit(edit_list[idx])
+
+        while True:
+            try:
+                ch = getch()
+            except (EOFError, KeyboardInterrupt):
+                return 0
+
+            if ch == "\x1b[A":  # up arrow — go to newer edit
+                if idx > 0:
+                    idx -= 1
+                    show_edit(edit_list[idx])
+            elif ch == "\x1b[B":  # down arrow — go to older edit
+                if idx < len(edit_list) - 1:
+                    idx += 1
+                    show_edit(edit_list[idx])
+            elif ch.lower() == "y":
+                console.print()
+                cx_print("Starting installation...", "info")
+                return self._run_edited_commands(edit_list[idx])
+            elif ch.lower() == "q" or ch == "\x03":
+                console.print()
+                return 0
+
+    # ─── history ────────────────────────────────────────────────────────
+
     def history(self, limit: int = 20, status: str | None = None, show_id: str | None = None, clear: bool = False):
         """Show installation history"""
         history = InstallationHistory()
@@ -1269,6 +1511,7 @@ def show_rich_help():
     table.add_row("uninstall <pkg>", "Remove installed software")
     table.add_row("stack <name>", "Install a pre-built stack")
     table.add_row("history", "View installation history")
+    table.add_row("edits", "Browse and re-run edited command history")
     table.add_row("rollback <id>", "Undo a previous installation")
     table.add_row("config show", "Show configuration")
 
@@ -1402,6 +1645,10 @@ def main():
         "--clear", action="store_true", help="Delete all installation history"
     )
 
+    # ── Edits command ──
+    edits_parser = subparsers.add_parser("edits", help="Browse and re-run edited command history")
+    edits_parser.add_argument("--limit", type=int, default=20, help="Number of edits to show (default: 20)")
+
     # ── Rollback command ──
     rollback_parser = subparsers.add_parser("rollback", help="Rollback a previous installation")
     rollback_id_arg = rollback_parser.add_argument("id", help="Installation ID to rollback")
@@ -1522,6 +1769,8 @@ def main():
             return cli.config(args)
         elif args.command == "history":
             return cli.history(args.limit, args.status, getattr(args, "show_id", None), args.clear)
+        elif args.command == "edits":
+            return cli.edits(args.limit)
         elif args.command == "rollback":
             return cli.rollback(args.id, args.dry_run)
         elif args.command == "uninstall":

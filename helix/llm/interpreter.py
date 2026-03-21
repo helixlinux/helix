@@ -327,8 +327,17 @@ Respond with ONLY this JSON format (no explanations):
         # Remove trailing commas before ] or }
         content = re.sub(r",\s*([}\]])", r"\1", content)
 
-        # Balance missing brackets/braces:
-        # Count unmatched [ and { and append the missing closers
+        # Extract all quoted string values from the commands array region.
+        # This is the most robust fix: handles extra braces/brackets anywhere
+        # inside or after the array (e.g. LLM outputs }}] or ]} at the end).
+        array_region_match = re.search(r'"commands"\s*:\s*\[([^\]]*(?:\][^\]]*)*)\]', content, re.DOTALL)
+        if array_region_match:
+            array_region = array_region_match.group(1)
+            strings = re.findall(r'"((?:[^"\\]|\\.)*)"', array_region)
+            if strings:
+                return json.dumps({"commands": strings})
+
+        # Fallback: balance missing brackets/braces
         open_braces = content.count("{") - content.count("}")
         open_brackets = content.count("[") - content.count("]")
 
