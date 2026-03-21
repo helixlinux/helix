@@ -127,6 +127,29 @@ class HelixCLI:
         sys.stdout.write("\r\033[K")
         sys.stdout.flush()
 
+    def _resolve_daemon_script_path(self, script_name: str) -> str:
+        """Resolve daemon script path for both repo and alternate layouts."""
+        this_file = Path(__file__).resolve()
+        candidates: list[Path] = []
+
+        # Walk upward from this module and look for daemon/scripts/<script>
+        for parent in this_file.parents:
+            candidates.append(parent / "daemon" / "scripts" / script_name)
+
+        # Fallbacks from current working directory
+        cwd = Path.cwd().resolve()
+        candidates.append(cwd / "daemon" / "scripts" / script_name)
+        candidates.append(cwd / "scripts" / script_name)
+
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate)
+
+        checked = "\n  - " + "\n  - ".join(str(c) for c in candidates)
+        raise FileNotFoundError(
+            f"Could not locate daemon script '{script_name}'. Checked:{checked}"
+        )
+
     # ─── ask ────────────────────────────────────────────────────────────
 
     def ask(self, question: str) -> int:
@@ -1318,7 +1341,7 @@ class HelixCLI:
         try:
             import subprocess
             cx_print("Installing helixd daemon...", "info")
-            script_path = os.path.join(os.path.dirname(__file__), "../daemon/scripts/install.sh")
+            script_path = self._resolve_daemon_script_path("install.sh")
             result = subprocess.run(["sudo", "bash", script_path], check=True)
             cx_print("Daemon installed successfully!", "success")
             return 0
@@ -1343,7 +1366,7 @@ class HelixCLI:
         try:
             import subprocess
             cx_print("Uninstalling helixd daemon...", "info")
-            script_path = os.path.join(os.path.dirname(__file__), "../daemon/scripts/install.sh")
+            script_path = self._resolve_daemon_script_path("install.sh")
             result = subprocess.run(["sudo", "bash", script_path, "uninstall"], check=True)
             cx_print("Daemon uninstalled successfully!", "success")
             return 0
@@ -1659,7 +1682,7 @@ class HelixCLI:
             cx_print("🧪 Running Daemon Tests", "info")
             
             # Determine which tests to run
-            cmd = ["bash", os.path.join(os.path.dirname(__file__), "../daemon/scripts/build.sh")]
+            cmd = ["bash", self._resolve_daemon_script_path("build.sh")]
             
             if getattr(args, "unit", False):
                 cmd.append("--unit")
