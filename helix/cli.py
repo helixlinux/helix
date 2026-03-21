@@ -1272,7 +1272,7 @@ class HelixCLI:
             return 1
 
     def daemon(self, args: argparse.Namespace) -> int:
-        """Handle daemon commands: install, uninstall, config, reload-config, version, ping, shutdown, run-tests."""
+        """Handle daemon commands: install, uninstall, config, reload-config, version, ping, shutdown, analyze-packages, alerts, security-install, run-tests."""
         action = getattr(args, "daemon_action", None)
 
         if action == "install":
@@ -1289,6 +1289,10 @@ class HelixCLI:
             return self._daemon_ping()
         elif action == "shutdown":
             return self._daemon_shutdown()
+        elif action == "alerts":
+            return self._daemon_alerts()
+        elif action == "security-install":
+            return self._daemon_security_install()
         elif action == "run-tests":
             return self._daemon_run_tests(args)
         elif action == "analyze-packages":
@@ -1512,7 +1516,142 @@ class HelixCLI:
         except DaemonConnectionError as e:
             self._print_error(str(e))
             return 1
+        
+    def _daemon_alerts(self) -> int:
+        """Get security alerts from daemon analysis."""
+        try:
+            from helix.daemon_client import DaemonClient, DaemonConnectionError, DaemonNotInstalledError
 
+            client = DaemonClient()
+            response = client.alerts_get()
+
+            if not response.success:
+                self._print_error(f"Failed to get daemon alerts: {response.error}")
+                return 1
+
+            result = response.result or {}
+            has_alerts = bool(result.get("has_alerts", False))
+            missing = int(result.get("missing_security_updates", 0) or 0)
+            package_manager = result.get("package_manager", "unknown")
+
+            cx_print(f"Security scan completed (package manager: {package_manager})", "info")
+            if not has_alerts:
+                cx_print("No security update alerts detected.", "success")
+                return 0
+
+            alerts = result.get("alerts", [])
+            console.print(f"[bold]Missing security updates:[/bold] {missing}")
+            for idx, alert in enumerate(alerts, 1):
+                title = alert.get("title", "Security Alert")
+                message = alert.get("message", "")
+                details = alert.get("details", "")
+                console.print(f"\n[bold]{idx}. {title}[/bold]")
+                if message:
+                    console.print(message)
+                if details:
+                    console.print("[dim]Details:[/dim]")
+                    console.print(f"[dim]{details}[/dim]")
+
+            cx_print("Run 'helix daemon security-install' to install missing security updates.", "warning")
+            return 0
+
+        except DaemonNotInstalledError as e:
+            self._print_error(str(e))
+            return 1
+        except DaemonConnectionError as e:
+            self._print_error(str(e))
+            return 1
+
+    def _daemon_security_install(self) -> int:
+        """Install missing security updates via daemon."""
+        try:
+            from helix.daemon_client import DaemonClient, DaemonConnectionError, DaemonNotInstalledError
+
+            client = DaemonClient()
+            response = client.security_patches_install()
+
+            if not response.success:
+                error_message = response.error or "unknown error"
+
+                # systemd sandbox may block apt/dpkg write paths for daemon process.
+                # Fall back to a local privileged install from CLI context.
+                if "Read-only file system" in error_message or "ensure sudo access" in error_message:
+                    cx_print(
+                        "Daemon install path is restricted on this system. Falling back to local privileged install...",
+                        "warning",
+                    )
+                    return self._daemon_security_install_local()
+
+                self._print_error(f"Failed to install security updates: {error_message}")
+                return 1
+
+            result = response.result or {}
+            package_manager = result.get("package_manager", "unknown")
+            cx_print(f"Security updates installed successfully (package manager: {package_manager})", "success")
+
+            output = result.get("output", "")
+            if output:
+                console.print("[dim]Installer output:[/dim]")
+                console.print(f"[dim]{output}[/dim]")
+            return 0
+
+        except DaemonNotInstalledError as e:
+            self._print_error(str(e))
+            return 1
+        except DaemonConnectionError as e:
+            cx_print(
+                "Daemon is unavailable. Falling back to local privileged install...",
+                "warning",
+            )
+            return self._daemon_security_install_local()
+
+    def _daemon_security_install_local(self) -> int:
+        """Install security updates directly from CLI process as a fallback path."""
+        try:
+            import shutil
+            import subprocess
+
+            commands: list[list[str]]
+            package_manager: str
+
+            if shutil.which("apt-get"):
+                package_manager = "apt"
+                commands = [
+                    ["sudo", "apt-get", "update"],
+                    ["sudo", "apt-get", "upgrade", "-y"],
+                ]
+            elif shutil.which("dnf"):
+                package_manager = "dnf"
+                commands = [["sudo", "dnf", "upgrade", "--security", "-y"]]
+            elif shutil.which("yum"):
+                package_manager = "yum"
+                commands = [["sudo", "yum", "update", "--security", "-y"]]
+            elif shutil.which("zypper"):
+                package_manager = "zypper"
+                commands = [["sudo", "zypper", "--non-interactive", "patch", "--category", "security"]]
+            elif shutil.which("pacman"):
+                package_manager = "pacman"
+                commands = [["sudo", "pacman", "-Syu", "--noconfirm"]]
+            else:
+                self._print_error("Could not detect a supported package manager for security updates")
+                return 1
+
+            cx_print(f"Installing security updates locally (package manager: {package_manager})", "info")
+
+            for cmd in commands:
+                result = subprocess.run(cmd, check=False)
+                if result.returncode != 0:
+                    self._print_error(
+                        f"Security update command failed with exit code {result.returncode}: {' '.join(cmd)}"
+                    )
+                    return result.returncode
+
+            cx_print("Security updates installed successfully", "success")
+            return 0
+
+        except Exception as e:
+            self._print_error(f"Local security update installation failed: {str(e)}")
+            return 1
     def _daemon_run_tests(self, args: argparse.Namespace) -> int:
         """Run daemon test suite."""
         try:
@@ -1750,6 +1889,12 @@ def main():
 
     # daemon analyze-packages - list outdated packages via daemon
     daemon_subs.add_parser("analyze-packages", help="List outdated packages on the system")
+
+    # daemon alerts - run security alert analysis
+    daemon_subs.add_parser("alerts", help="Show daemon security alerts and missing security updates")
+
+    # daemon security-install - install missing security updates
+    daemon_subs.add_parser("security-install", help="Install missing security updates")
 
     # daemon run-tests - run daemon test suite
     daemon_run_tests_parser = daemon_subs.add_parser(

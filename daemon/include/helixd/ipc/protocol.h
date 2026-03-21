@@ -71,6 +71,7 @@
      constexpr const char* ALERTS_GET = "alerts.get";
      constexpr const char* ALERTS_ACK = "alerts.acknowledge";
      constexpr const char* ALERTS_DISMISS = "alerts.dismiss";
+    constexpr const char* SECURITY_PATCHES_INSTALL = "security.patches.install";
      
      // Configuration
      constexpr const char* CONFIG_GET = "config.get";

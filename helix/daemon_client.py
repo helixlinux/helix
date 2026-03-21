@@ -2,7 +2,9 @@
 Helix Daemon IPC Client
 
 Provides communication with the helixd daemon via Unix socket IPC.
-Supports the PR1 commands: ping, version, config.get, config.reload, shutdown.
+Supports core commands plus security commands:
+- ping, version, config.get, config.reload, shutdown
+- alerts.get, security.patches.install
 """
 
 import json
@@ -251,6 +253,24 @@ class DaemonClient:
             DaemonResponse with {"shutdown": "initiated"} on success.
         """
         return self._send_request("shutdown")
+
+    def alerts_get(self) -> DaemonResponse:
+        """
+        Get daemon-generated security alerts.
+
+        Returns:
+            DaemonResponse including current alerts and missing security update count.
+        """
+        return self._send_request("alerts.get")
+
+    def security_patches_install(self) -> DaemonResponse:
+        """
+        Install missing security updates.
+
+        Returns:
+            DaemonResponse indicating whether installation succeeded.
+        """
+        return self._send_request("security.patches.install")
 
 
 class DaemonNotInstalledError(Exception):

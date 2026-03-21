@@ -9,8 +9,107 @@
 #include "helixd/logger.h"
 #include <array>
 #include <cstdio>
+#include <cstdlib>
+#include <memory>
 #include <sstream>
 #include <string>
+#include <sys/wait.h>
+
+namespace {
+
+std::string trim(const std::string& s) {
+    size_t start = s.find_first_not_of(" \t\n\r");
+    if (start == std::string::npos) {
+        return "";
+    }
+    size_t end = s.find_last_not_of(" \t\n\r");
+    return s.substr(start, end - start + 1);
+}
+
+std::string shell_escape_single_quoted(const std::string& input) {
+    std::string out;
+    out.reserve(input.size() + 8);
+    out.push_back('\'');
+    for (char c : input) {
+        if (c == '\'') {
+            out += "'\\''";
+        } else {
+            out.push_back(c);
+        }
+    }
+    out.push_back('\'');
+    return out;
+}
+
+bool run_command_capture_stdout(const std::string& command, std::string& output, int& exit_code) {
+    output.clear();
+    exit_code = -1;
+
+    std::array<char, 4096> buffer{};
+    std::string wrapped = "bash -lc " + shell_escape_single_quoted(command);
+
+    std::unique_ptr<FILE, int (*)(FILE*)> pipe(popen(wrapped.c_str(), "r"), pclose);
+    if (!pipe) {
+        return false;
+    }
+
+    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe.get()) != nullptr) {
+        output.append(buffer.data());
+    }
+
+    int status = pclose(pipe.release());
+    if (status == -1) {
+        return false;
+    }
+
+    if (WIFEXITED(status)) {
+        exit_code = WEXITSTATUS(status);
+    } else {
+        exit_code = -1;
+    }
+    return true;
+}
+
+bool detect_package_manager(std::string& pm) {
+    int code = -1;
+    std::string out;
+
+    if (run_command_capture_stdout("command -v apt-get >/dev/null 2>&1", out, code) && code == 0) {
+        pm = "apt";
+        return true;
+    }
+    if (run_command_capture_stdout("command -v dnf >/dev/null 2>&1", out, code) && code == 0) {
+        pm = "dnf";
+        return true;
+    }
+    if (run_command_capture_stdout("command -v yum >/dev/null 2>&1", out, code) && code == 0) {
+        pm = "yum";
+        return true;
+    }
+    if (run_command_capture_stdout("command -v zypper >/dev/null 2>&1", out, code) && code == 0) {
+        pm = "zypper";
+        return true;
+    }
+    if (run_command_capture_stdout("command -v pacman >/dev/null 2>&1", out, code) && code == 0) {
+        pm = "pacman";
+        return true;
+    }
+    return false;
+}
+
+int count_non_empty_lines(const std::string& text) {
+    std::istringstream iss(text);
+    std::string line;
+    int count = 0;
+    while (std::getline(iss, line)) {
+        if (!trim(line).empty()) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+}
 
 namespace helixd {
 
@@ -22,6 +121,14 @@ void Handlers::register_all(IPCServer& server) {
     
     server.register_handler(Methods::VERSION, [](const Request& req) {
         return handle_version(req);
+    });
+
+    // Security handlers
+    server.register_handler(Methods::ALERTS_GET, [](const Request& req) {
+        return handle_alerts_get(req);
+    });
+    server.register_handler(Methods::SECURITY_PATCHES_INSTALL, [](const Request& req) {
+        return handle_security_patches_install(req);
     });
     
     // Config handlers
@@ -42,8 +149,8 @@ void Handlers::register_all(IPCServer& server) {
     server.register_handler(Methods::SHUTDOWN, [](const Request& req) {
         return handle_shutdown(req);
     });
-
-    LOG_INFO("Handlers", "Registered 6 core IPC handlers");
+    
+    LOG_INFO("Handlers", "Registered 7 IPC handlers");
 }
 
 Response Handlers::handle_ping(const Request& /*req*/) {
@@ -54,6 +161,56 @@ Response Handlers::handle_version(const Request& /*req*/) {
     return Response::ok({
         {"version", VERSION},
         {"name", NAME}
+    });
+}
+
+Response Handlers::handle_alerts_get(const Request& /*req*/) {
+    std::string package_manager;
+    if (!detect_package_manager(package_manager)) {
+        return Response::err("Could not detect package manager", ErrorCodes::INTERNAL_ERROR);
+    }
+
+    std::string list_cmd;
+    if (package_manager == "apt") {
+        list_cmd = "apt list --upgradable 2>/dev/null | tail -n +2 | grep -i -- '-security\\|security' || true";
+    } else if (package_manager == "dnf") {
+        list_cmd = "dnf -q updateinfo list security 2>/dev/null | tail -n +1 || true";
+    } else if (package_manager == "yum") {
+        list_cmd = "yum -q updateinfo list security 2>/dev/null | tail -n +1 || true";
+    } else if (package_manager == "zypper") {
+        list_cmd = "zypper -q list-patches --category security 2>/dev/null | tail -n +1 || true";
+    } else if (package_manager == "pacman") {
+        list_cmd = "checkupdates 2>/dev/null || true";
+    } else {
+        return Response::err("Unsupported package manager", ErrorCodes::INTERNAL_ERROR);
+    }
+
+    std::string stdout_text;
+    int exit_code = -1;
+    if (!run_command_capture_stdout(list_cmd, stdout_text, exit_code)) {
+        return Response::err("Failed to query security updates", ErrorCodes::INTERNAL_ERROR);
+    }
+
+    int missing_count = count_non_empty_lines(stdout_text);
+    bool has_alert = missing_count > 0;
+
+    json alerts = json::array();
+    if (has_alert) {
+        alerts.push_back({
+            {"id", "security-updates-missing"},
+            {"severity", "warning"},
+            {"title", "Security updates are missing"},
+            {"message", "System has pending security patches. Install them to reduce risk."},
+            {"missing_security_updates", missing_count},
+            {"details", trim(stdout_text)}
+        });
+    }
+
+    return Response::ok({
+        {"package_manager", package_manager},
+        {"has_alerts", has_alert},
+        {"alerts", alerts},
+        {"missing_security_updates", missing_count}
     });
 }
 
@@ -144,6 +301,49 @@ Response Handlers::handle_shutdown(const Request& /*req*/) {
     LOG_INFO("Handlers", "Shutdown requested via IPC");
     Daemon::instance().request_shutdown();
     return Response::ok({{"shutdown", "initiated"}});
+}
+
+Response Handlers::handle_security_patches_install(const Request& /*req*/) {
+    std::string package_manager;
+    if (!detect_package_manager(package_manager)) {
+        return Response::err("Could not detect package manager", ErrorCodes::INTERNAL_ERROR);
+    }
+
+    // Run security update installation through sudo in non-interactive mode.
+    // If sudo requires a password, this will fail gracefully with a useful error.
+    std::string install_cmd;
+    if (package_manager == "apt") {
+        install_cmd = "sudo -n apt-get update && sudo -n apt-get upgrade -y";
+    } else if (package_manager == "dnf") {
+        install_cmd = "sudo -n dnf upgrade --security -y";
+    } else if (package_manager == "yum") {
+        install_cmd = "sudo -n yum update --security -y";
+    } else if (package_manager == "zypper") {
+        install_cmd = "sudo -n zypper --non-interactive patch --category security";
+    } else if (package_manager == "pacman") {
+        install_cmd = "sudo -n pacman -Syu --noconfirm";
+    } else {
+        return Response::err("Unsupported package manager", ErrorCodes::INTERNAL_ERROR);
+    }
+
+    std::string stdout_text;
+    int exit_code = -1;
+    if (!run_command_capture_stdout(install_cmd + " 2>&1", stdout_text, exit_code)) {
+        return Response::err("Failed to execute security patch command", ErrorCodes::INTERNAL_ERROR);
+    }
+
+    if (exit_code != 0) {
+        return Response::err(
+            "Security patch installation failed (ensure sudo access). Output: " + trim(stdout_text),
+            ErrorCodes::INTERNAL_ERROR
+        );
+    }
+
+    return Response::ok({
+        {"installed", true},
+        {"package_manager", package_manager},
+        {"output", trim(stdout_text)}
+    });
 }
 
 } // namespace helixd
