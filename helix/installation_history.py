@@ -128,6 +128,18 @@ class InstallationHistory:
                     ON installations(timestamp)
                 """)
 
+                # Create command_edits table for storing nano-edited commands
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS command_edits (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT NOT NULL,
+                        prompt TEXT NOT NULL,
+                        original_cmds TEXT NOT NULL,
+                        edited_cmds TEXT NOT NULL,
+                        was_installed INTEGER NOT NULL DEFAULT 0
+                    )
+                """)
+
                 conn.commit()
 
             logger.info(f"Database initialized at {self.db_path}")
@@ -659,6 +671,71 @@ class InstallationHistory:
         except Exception as e:
             logger.error(f"Failed to clear history: {e}")
             return 0
+
+    def save_edit(
+        self,
+        prompt: str,
+        original_cmds: list[str],
+        edited_cmds: list[str],
+        was_installed: bool = False,
+    ) -> int:
+        """Save a nano edit session. Returns the new row id."""
+        timestamp = datetime.datetime.now(timezone.utc).isoformat()
+        try:
+            with self._pool.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO command_edits (timestamp, prompt, original_cmds, edited_cmds, was_installed) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        timestamp,
+                        prompt,
+                        json.dumps(original_cmds),
+                        json.dumps(edited_cmds),
+                        int(was_installed),
+                    ),
+                )
+                conn.commit()
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"Failed to save edit: {e}")
+            return -1
+
+    def mark_edit_installed(self, edit_id: int) -> None:
+        """Mark a command_edits row as installed."""
+        try:
+            with self._pool.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE command_edits SET was_installed = 1 WHERE id = ?", (edit_id,)
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to mark edit as installed: {e}")
+
+    def get_edits(self, limit: int = 50) -> list[dict]:
+        """Return edit history, newest first."""
+        try:
+            with self._pool.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT id, timestamp, prompt, original_cmds, edited_cmds, was_installed FROM command_edits ORDER BY id DESC LIMIT ?",
+                    (limit,),
+                )
+                rows = cursor.fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "timestamp": r[1],
+                    "prompt": r[2],
+                    "original_cmds": json.loads(r[3]),
+                    "edited_cmds": json.loads(r[4]),
+                    "was_installed": bool(r[5]),
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.error(f"Failed to get edits: {e}")
+            return []
 
 
 # CLI Interface
