@@ -49,7 +49,9 @@ class FirstRunWizard:
             if not self._configure_api_key(provider):
                 cx_print("Wizard cancelled. No API key configured.", "warning")
                 return 1
-            self._save_provider(provider)
+            # Save provider preference to ~/.helix/.env only (never touch project .env)
+            save_provider = "claude" if provider == "anthropic" else provider
+            self.detector._save_provider_to_env(save_provider)
 
         # 4. Verification dry-run
         self._verify_setup(provider)
@@ -203,11 +205,9 @@ class FirstRunWizard:
     # ── Helpers ──────────────────────────────────────────────────────
 
     def _save_provider(self, provider: str):
-        self.detector._save_provider_to_env(provider)
-        os.environ["HELIX_PROVIDER"] = provider
-        cwd_env = Path.cwd() / ".env"
-        if cwd_env.exists():
-            self._update_env_file(cwd_env, "HELIX_PROVIDER", provider)
+        save_provider = "claude" if provider == "anthropic" else provider
+        self.detector._save_provider_to_env(save_provider)
+        os.environ["HELIX_PROVIDER"] = save_provider
 
     def _detect_current_provider(self) -> str | None:
         explicit = os.environ.get("HELIX_PROVIDER", "").lower()
