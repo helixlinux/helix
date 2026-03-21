@@ -20,31 +20,21 @@ pip install -e .
 
 ## Configure AI Provider
 
-Copy the example and edit `.env`:
+Run the interactive wizard:
 
 ```bash
-cp .env.example .env
+helix wizard
 ```
 
-Set one of the following in `.env`:
+This will prompt you to choose a provider (OpenAI, Claude, or Ollama) and enter your API key. The key is saved to `~/.helix/.env` and your project `.env`.
 
-**Ollama (free, local):**
-```
-HELIX_PROVIDER=ollama
-```
-Then run: `python scripts/setup_ollama.py`
+Or configure manually by copying `.env.example` to `.env` and setting:
 
-**OpenAI:**
-```
-HELIX_PROVIDER=openai
-OPENAI_API_KEY=your-key-here
-```
-
-**Claude (Anthropic):**
-```
-HELIX_PROVIDER=claude
-ANTHROPIC_API_KEY=your-key-here
-```
+| Provider | Variables |
+|----------|-----------|
+| **Ollama** (free, local) | `HELIX_PROVIDER=ollama` then run `python scripts/setup_ollama.py` |
+| **OpenAI** | `HELIX_PROVIDER=openai` and `OPENAI_API_KEY=your-key` |
+| **Claude** | `HELIX_PROVIDER=claude` and `ANTHROPIC_API_KEY=your-key` |
 
 ---
 
@@ -62,6 +52,7 @@ Install software using natural language.
 helix install nginx --dry-run       # Preview (default)
 helix install nginx --execute       # Actually install
 helix install nginx --parallel      # Parallel execution
+helix install nginx --sandbox --execute  # Test in Docker first, then install
 ```
 
 ### stack
@@ -95,6 +86,38 @@ Undo a previous installation. Compares before/after package snapshots and restor
 ```bash
 helix rollback <id> --dry-run       # Preview what would be rolled back
 helix rollback <id>                 # Execute the rollback
+```
+
+### resolve
+Resolve package dependency conflicts or diagnose installation errors.
+```bash
+helix resolve nginx --tree          # Show dependency tree
+helix resolve docker --auto-remove-conflicts  # Handle conflicts
+helix resolve --error "Unable to locate package nginx"  # Diagnose error
+helix resolve --error-file error.log --json   # Parse error from file
+```
+
+### sandbox
+Manage Docker sandbox environments for safe package testing.
+```bash
+helix sandbox status                # Show Docker availability and active sandboxes
+helix sandbox cleanup               # Remove all sandbox containers
+```
+
+### daemon
+Manage the helixd background daemon.
+```bash
+helix daemon install --execute      # Install and enable daemon service
+helix daemon uninstall --execute    # Stop and remove daemon service
+helix daemon config                 # Show daemon configuration
+helix daemon ping                   # Test daemon connectivity
+helix daemon shutdown               # Request daemon shutdown
+```
+
+### wizard
+Interactive setup wizard for API key and provider configuration.
+```bash
+helix wizard                        # Configure provider and API key
 ```
 
 ### config
