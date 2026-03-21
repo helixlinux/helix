@@ -10,14 +10,13 @@ import logging
 import os
 import platform
 import re
-import shutil
 import sqlite3
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from helix.config_utils import get_ollama_model
+from helix.hardware_context import HardwareContextProvider
 
 # Module logger for debug diagnostics
 logger = logging.getLogger(__name__)
@@ -41,107 +40,41 @@ class SystemInfoGatherer:
 
         return sys.executable
 
-    @staticmethod
-    def get_os_info() -> dict[str, str]:
-        """Get OS information."""
-        return {
-            "system": platform.system(),
-            "release": platform.release(),
-            "version": platform.version(),
-            "machine": platform.machine(),
-        }
-
-    @staticmethod
-    def get_installed_package(package: str) -> str | None:
-        """Check if a package is installed via apt and return version."""
-        try:
-            result = subprocess.run(
-                ["dpkg-query", "-W", "-f=${Version}", package],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0:
-                return result.stdout.strip()
-        except (subprocess.SubprocessError, FileNotFoundError):
-            # If dpkg-query is unavailable or fails, return None silently.
-            # We avoid user-visible logs to keep CLI output clean.
-            pass
-        return None
-
-    @staticmethod
-    def get_pip_package(package: str) -> str | None:
-        """Check if a Python package is installed via pip."""
-        try:
-            result = subprocess.run(
-                ["pip3", "show", package],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    if line.startswith("Version:"):
-                        return line.split(":", 1)[1].strip()
-        except (subprocess.SubprocessError, FileNotFoundError):
-            # If pip is unavailable or the command fails, return None silently.
-            pass
-        return None
-
-    @staticmethod
-    def check_command_exists(cmd: str) -> bool:
-        """Check if a command exists in PATH."""
-        return shutil.which(cmd) is not None
-
-    @staticmethod
-    def get_gpu_info() -> dict[str, Any]:
-        """Get GPU information if available."""
-        gpu_info: dict[str, Any] = {"available": False, "nvidia": False, "cuda": None}
-
-        # Check for nvidia-smi
-        if shutil.which("nvidia-smi"):
-            gpu_info["nvidia"] = True
-            gpu_info["available"] = True
-            try:
-                result = subprocess.run(
-                    ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if result.returncode == 0:
-                    gpu_info["model"] = result.stdout.strip().split(",")[0]
-            except (subprocess.SubprocessError, FileNotFoundError):
-                # If nvidia-smi is unavailable or fails, keep defaults.
-                pass
-
-            # Check CUDA version
-            try:
-                result = subprocess.run(
-                    ["nvcc", "--version"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if result.returncode == 0:
-                    for line in result.stdout.splitlines():
-                        if "release" in line.lower():
-                            parts = line.split("release")
-                            if len(parts) > 1:
-                                gpu_info["cuda"] = parts[1].split(",")[0].strip()
-            except (subprocess.SubprocessError, FileNotFoundError):
-                # If nvcc is unavailable or fails, leave CUDA info unset.
-                pass
-
-        return gpu_info
-
     def gather_context(self) -> dict[str, Any]:
         """Gather relevant system context for LLM."""
+        hardware = HardwareContextProvider.get_hardware_details(include_volatile=True)
+        system = hardware.get("system", {})
+        cpu = hardware.get("cpu", {})
+        caps = hardware.get("capabilities", {})
+
         return {
             "python_version": self.get_python_version(),
             "python_path": self.get_python_path(),
-            "os": self.get_os_info(),
-            "gpu": self.get_gpu_info(),
+            # Backward-compatible summary keys
+            "os": {
+                "system": platform.system(),
+                "release": platform.release(),
+                "version": platform.version(),
+                "machine": platform.machine(),
+                "distro": system.get("distro", ""),
+                "distro_version": system.get("distro_version", ""),
+                "kernel": system.get("kernel_version", ""),
+            },
+            "gpu": {
+                "available": bool(hardware.get("gpu")),
+                "nvidia": bool(caps.get("has_nvidia_gpu")),
+                "amd": bool(caps.get("has_amd_gpu")),
+                "cuda": bool(caps.get("cuda_available")),
+                "rocm": bool(caps.get("rocm_available")),
+                "models": [g.get("model", "") for g in hardware.get("gpu", []) if g.get("model")],
+            },
+            "cpu": cpu,
+            "memory": hardware.get("memory", {}),
+            "storage": hardware.get("storage", []),
+            "network": hardware.get("network", []),
+            "capabilities": caps,
+            # Full canonical payload for richer answers
+            "hardware": hardware,
         }
 
 

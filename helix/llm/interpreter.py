@@ -6,7 +6,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Optional
 
 from helix.config_utils import get_ollama_model
-from helix.hardware_detection import detect_hardware
+from helix.hardware_context import HardwareContextProvider
 
 logger = logging.getLogger(__name__)
 
@@ -82,53 +82,7 @@ class CommandInterpreter:
 
     def _gather_hardware_context(self) -> str:
         """Gather hardware info and format it as context for LLM prompts."""
-        try:
-            info = detect_hardware()
-            parts = []
-
-            # OS
-            if info.distro:
-                parts.append(f"OS: {info.distro} {info.distro_version}")
-            parts.append(f"Kernel: {info.kernel_version}")
-            parts.append(f"Arch: {info.cpu.architecture}")
-
-            # CPU
-            parts.append(f"CPU: {info.cpu.model} ({info.cpu.cores} cores, {info.cpu.threads} threads)")
-            if info.cpu.features:
-                parts.append(f"CPU features: {', '.join(info.cpu.features)}")
-
-            # GPU
-            if info.gpu:
-                gpu_strs = []
-                for gpu in info.gpu:
-                    s = gpu.model
-                    if gpu.memory_mb:
-                        s += f" ({gpu.memory_mb} MB)"
-                    gpu_strs.append(s)
-                parts.append(f"GPU: {', '.join(gpu_strs)}")
-            else:
-                parts.append("GPU: None detected")
-
-            if info.has_nvidia_gpu:
-                parts.append(f"CUDA available: {info.cuda_available}")
-            if info.has_amd_gpu:
-                parts.append(f"ROCm available: {info.rocm_available}")
-
-            # Memory (exclude volatile "available" values so semantic cache keys stay stable)
-            parts.append(f"RAM: {info.memory.total_gb} GB")
-
-            # Storage
-            if info.storage:
-                root = next((s for s in info.storage if s.mount_point == "/"), info.storage[0])
-                parts.append(f"Disk: {root.total_gb:.1f} GB total")
-
-            if info.virtualization:
-                parts.append(f"Virtualization: {info.virtualization}")
-
-            return "\n".join(parts)
-        except Exception as e:
-            logger.debug(f"Hardware detection failed: {e}")
-            return ""
+        return HardwareContextProvider.to_prompt_text(include_volatile=True)
 
     def _initialize_client(self):
         if self.provider == APIProvider.OPENAI:

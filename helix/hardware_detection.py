@@ -274,26 +274,112 @@ class HardwareDetector:
                 info.kernel_version = data.get("kernel_version", "")
                 info.distro = data.get("distro", "")
                 info.distro_version = data.get("distro_version", "")
+                info.uptime_seconds = int(data.get("uptime_seconds", 0) or 0)
 
                 # CPU
                 cpu_data = data.get("cpu", {})
+                cpu_vendor = cpu_data.get("vendor", "unknown")
+                try:
+                    vendor_enum = CPUVendor(cpu_vendor)
+                except ValueError:
+                    vendor_enum = CPUVendor.UNKNOWN
+
                 info.cpu = CPUInfo(
-                    vendor=CPUVendor(cpu_data.get("vendor", "unknown")),
+                    vendor=vendor_enum,
                     model=cpu_data.get("model", "Unknown"),
-                    cores=cpu_data.get("cores", 0),
-                    threads=cpu_data.get("threads", 0),
+                    cores=int(cpu_data.get("cores", 0) or 0),
+                    threads=int(cpu_data.get("threads", 0) or 0),
+                    frequency_mhz=float(cpu_data.get("frequency_mhz", 0.0) or 0.0),
+                    architecture=cpu_data.get("architecture", "x86_64"),
+                    features=list(cpu_data.get("features", []) or []),
                 )
+
+                # GPU
+                info.gpu = []
+                for gpu_data in data.get("gpu", []) or []:
+                    vendor_raw = gpu_data.get("vendor", "unknown")
+                    try:
+                        gpu_vendor = GPUVendor(vendor_raw)
+                    except ValueError:
+                        gpu_vendor = GPUVendor.UNKNOWN
+
+                    pci_id = gpu_data.get("pci_id", "")
+                    vendor_from_pci = self._gpu_vendor_from_pci_id(pci_id)
+                    if vendor_from_pci != GPUVendor.UNKNOWN:
+                        gpu_vendor = vendor_from_pci
+
+                    model = gpu_data.get("model", "Unknown")
+                    model_upper = model.upper()
+                    if gpu_vendor == GPUVendor.INTEL and ("AMD" in model_upper or "ATI" in model_upper):
+                        model = "Intel GPU"
+                    elif gpu_vendor == GPUVendor.NVIDIA and "AMD" in model_upper:
+                        model = "NVIDIA GPU"
+                    elif gpu_vendor == GPUVendor.AMD and "NVIDIA" in model_upper:
+                        model = "AMD GPU"
+
+                    info.gpu.append(
+                        GPUInfo(
+                            vendor=gpu_vendor,
+                            model=model,
+                            memory_mb=int(gpu_data.get("memory_mb", 0) or 0),
+                            driver_version=gpu_data.get("driver_version", ""),
+                            cuda_version=gpu_data.get("cuda_version", ""),
+                            compute_capability=gpu_data.get("compute_capability", ""),
+                            pci_id=pci_id,
+                        )
+                    )
 
                 # Memory
                 mem_data = data.get("memory", {})
                 info.memory = MemoryInfo(
-                    total_mb=mem_data.get("total_mb", 0),
-                    available_mb=mem_data.get("available_mb", 0),
+                    total_mb=int(mem_data.get("total_mb", 0) or 0),
+                    available_mb=int(mem_data.get("available_mb", 0) or 0),
+                    swap_total_mb=int(mem_data.get("swap_total_mb", 0) or 0),
+                    swap_free_mb=int(mem_data.get("swap_free_mb", 0) or 0),
                 )
 
+                # Storage
+                info.storage = []
+                for storage_data in data.get("storage", []) or []:
+                    info.storage.append(
+                        StorageInfo(
+                            device=storage_data.get("device", ""),
+                            mount_point=storage_data.get("mount_point", ""),
+                            filesystem=storage_data.get("filesystem", ""),
+                            total_gb=float(storage_data.get("total_gb", 0.0) or 0.0),
+                            used_gb=float(storage_data.get("used_gb", 0.0) or 0.0),
+                            available_gb=float(storage_data.get("available_gb", 0.0) or 0.0),
+                        )
+                    )
+
+                # Network
+                info.network = []
+                for net_data in data.get("network", []) or []:
+                    info.network.append(
+                        NetworkInfo(
+                            interface=net_data.get("interface", ""),
+                            ip_address=net_data.get("ip_address", ""),
+                            mac_address=net_data.get("mac_address", ""),
+                            speed_mbps=int(net_data.get("speed_mbps", 0) or 0),
+                            is_wireless=bool(net_data.get("is_wireless", False)),
+                        )
+                    )
+
                 # Capabilities
-                info.has_nvidia_gpu = data.get("has_nvidia_gpu", False)
-                info.cuda_available = data.get("cuda_available", False)
+                gpu_has_nvidia = any(g.vendor == GPUVendor.NVIDIA for g in info.gpu)
+                gpu_has_amd = any(g.vendor == GPUVendor.AMD for g in info.gpu)
+
+                # Prefer derived flags from parsed GPU list; only fall back to cached
+                # booleans if cache did not include GPU entries.
+                if info.gpu:
+                    info.has_nvidia_gpu = gpu_has_nvidia
+                    info.has_amd_gpu = gpu_has_amd
+                else:
+                    info.has_nvidia_gpu = bool(data.get("has_nvidia_gpu", False))
+                    info.has_amd_gpu = bool(data.get("has_amd_gpu", False))
+                info.cuda_available = bool(data.get("cuda_available", False))
+                info.rocm_available = bool(data.get("rocm_available", False))
+                info.virtualization = data.get("virtualization", "")
 
                 return info
 
@@ -428,20 +514,52 @@ class HardwareDetector:
         if pci_match:
             gpu.pci_id = pci_match.group(1)
 
-        upper = line.upper()
-        if "NVIDIA" in upper:
+        # Prefer reliable PCI vendor-id mapping first.
+        vendor_from_pci = self._gpu_vendor_from_pci_id(gpu.pci_id)
+        if vendor_from_pci == GPUVendor.NVIDIA:
             gpu.vendor = GPUVendor.NVIDIA
             info.has_nvidia_gpu = True
             gpu.model = self._extract_gpu_model(line, "NVIDIA")
-        elif "AMD" in upper or "ATI" in upper:
+            return gpu
+        if vendor_from_pci == GPUVendor.AMD:
             gpu.vendor = GPUVendor.AMD
             info.has_amd_gpu = True
             gpu.model = self._extract_gpu_model(line, "AMD")
-        elif "INTEL" in upper:
+            return gpu
+        if vendor_from_pci == GPUVendor.INTEL:
+            gpu.vendor = GPUVendor.INTEL
+            gpu.model = self._extract_gpu_model(line, "INTEL")
+            return gpu
+
+        upper = line.upper()
+        # Fallback textual matching (word boundaries prevent false ATI matches in 'compatible').
+        if re.search(r"\bNVIDIA\b", upper):
+            gpu.vendor = GPUVendor.NVIDIA
+            info.has_nvidia_gpu = True
+            gpu.model = self._extract_gpu_model(line, "NVIDIA")
+        elif re.search(r"\bAMD\b", upper) or re.search(r"\bATI\b", upper):
+            gpu.vendor = GPUVendor.AMD
+            info.has_amd_gpu = True
+            gpu.model = self._extract_gpu_model(line, "AMD")
+        elif re.search(r"\bINTEL\b", upper):
             gpu.vendor = GPUVendor.INTEL
             gpu.model = self._extract_gpu_model(line, "INTEL")
 
         return gpu
+
+    def _gpu_vendor_from_pci_id(self, pci_id: str) -> GPUVendor:
+        """Infer GPU vendor from PCI ID (vendor:device)."""
+        if not pci_id or ":" not in pci_id:
+            return GPUVendor.UNKNOWN
+
+        vendor_id = pci_id.split(":", 1)[0].lower()
+        if vendor_id == "10de":
+            return GPUVendor.NVIDIA
+        if vendor_id == "1002":
+            return GPUVendor.AMD
+        if vendor_id == "8086":
+            return GPUVendor.INTEL
+        return GPUVendor.UNKNOWN
 
     def _extract_gpu_model(self, line: str, vendor: str) -> str:
         """Extract GPU model name from lspci line."""
@@ -473,14 +591,14 @@ class HardwareDetector:
             if result.returncode == 0:
                 info.cuda_available = True
 
+                nvidia_gpus = [g for g in info.gpu if g.vendor == GPUVendor.NVIDIA]
                 for i, line in enumerate(result.stdout.strip().split("\n")):
                     parts = [p.strip() for p in line.split(",")]
-                    if len(parts) >= 4 and i < len(info.gpu):
-                        if info.gpu[i].vendor == GPUVendor.NVIDIA:
-                            info.gpu[i].model = parts[0]
-                            info.gpu[i].memory_mb = int(parts[1])
-                            info.gpu[i].driver_version = parts[2]
-                            info.gpu[i].compute_capability = parts[3]
+                    if len(parts) >= 4 and i < len(nvidia_gpus):
+                        nvidia_gpus[i].model = parts[0]
+                        nvidia_gpus[i].memory_mb = int(parts[1])
+                        nvidia_gpus[i].driver_version = parts[2]
+                        nvidia_gpus[i].compute_capability = parts[3]
 
         except FileNotFoundError:
             logger.debug("nvidia-smi not found")
