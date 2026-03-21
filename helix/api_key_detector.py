@@ -128,8 +128,8 @@ class APIKeyDetector:
         Respects HELIX_PROVIDER setting when multiple keys are available.
         Falls back to OpenAI if Anthropic is not available but OpenAI is.
         """
-        # Check if user has explicit provider preference
-        preferred_provider = os.environ.get("HELIX_PROVIDER", "").lower()
+        # Check if user has explicit provider preference (env var or saved file)
+        preferred_provider = self._get_saved_provider_preference()
 
         # If provider is specified, check for that key first
         if preferred_provider in ("anthropic", "claude"):
@@ -206,12 +206,28 @@ class APIKeyDetector:
 
         return None
 
+    def _get_saved_provider_preference(self) -> str:
+        """Get HELIX_PROVIDER from env var or ~/.helix/.env file."""
+        pref = os.environ.get("HELIX_PROVIDER", "").lower()
+        if pref:
+            return pref
+        env_file = Path.home() / HELIX_DIR / HELIX_ENV_FILE
+        if env_file.exists():
+            try:
+                for line in env_file.read_text().splitlines():
+                    line = line.strip()
+                    if line.startswith("HELIX_PROVIDER="):
+                        return line.split("=", 1)[1].strip().strip("\"'").lower()
+            except OSError:
+                pass
+        return ""
+
     def _check_location(
         self, source: str | Path, env_vars: list[str]
     ) -> tuple[bool, str | None, str | None, str | None] | None:
         """Check a specific location for API keys."""
         # Respect preferred provider when multiple keys exist in a location
-        preferred_provider = os.environ.get("HELIX_PROVIDER", "").lower()
+        preferred_provider = self._get_saved_provider_preference()
         if preferred_provider in ("openai", "anthropic", "claude"):
             # Build ordered list with preferred env var first
             preferred_var = (

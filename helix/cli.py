@@ -75,6 +75,8 @@ class HelixCLI:
         explicit_provider = os.environ.get("HELIX_PROVIDER", "").lower()
         if explicit_provider in ["ollama", "openai", "claude", "fake"]:
             return explicit_provider
+        if explicit_provider == "anthropic":
+            return "claude"
 
         # Use provider from auto-detection (set by _get_api_key)
         detected = getattr(self, "_detected_provider", None)
@@ -1374,6 +1376,9 @@ def main():
     uninstall_parser.add_argument("--execute", action="store_true", help="Execute removal (dry-run is default)")
     uninstall_parser.add_argument("--dry-run", action="store_true", help="Show commands only (default)")
 
+    # Wizard
+    subparsers.add_parser("wizard", help="Run the first-run setup wizard (API key configuration)")
+
     # ── Parse and route ──
     args = parser.parse_args()
 
@@ -1408,6 +1413,10 @@ def main():
             return cli.rollback(args.id, args.dry_run)
         elif args.command == "uninstall":
             return cli.uninstall(args.software, execute=args.execute, dry_run=args.dry_run)
+        elif args.command == "wizard":
+            from helix.first_run_wizard import FirstRunWizard
+            wizard = FirstRunWizard()
+            return wizard.run()
         else:
             parser.print_help()
             return 1
