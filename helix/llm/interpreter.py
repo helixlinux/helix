@@ -114,13 +114,13 @@ class CommandInterpreter:
             if info.has_amd_gpu:
                 parts.append(f"ROCm available: {info.rocm_available}")
 
-            # Memory
-            parts.append(f"RAM: {info.memory.total_gb} GB ({info.memory.available_gb} GB available)")
+            # Memory (exclude volatile "available" values so semantic cache keys stay stable)
+            parts.append(f"RAM: {info.memory.total_gb} GB")
 
             # Storage
             if info.storage:
                 root = next((s for s in info.storage if s.mount_point == "/"), info.storage[0])
-                parts.append(f"Disk: {root.available_gb:.1f} GB free / {root.total_gb:.1f} GB total")
+                parts.append(f"Disk: {root.total_gb:.1f} GB total")
 
             if info.virtualization:
                 parts.append(f"Virtualization: {info.virtualization}")
