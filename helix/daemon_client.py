@@ -197,6 +197,16 @@ class DaemonClient:
     # PR1 IPC Methods
     # =========================================================================
 
+    def analyze_packages(self) -> DaemonResponse:
+        """
+        Request outdated package analysis from the daemon.
+
+        Returns:
+            DaemonResponse with {"packages": [...]} list of outdated packages.
+            Each package: {"name", "current_version", "latest_version"}
+        """
+        return self._send_request("packages.analyze")
+
     def ping(self) -> DaemonResponse:
         """
         Ping the daemon to check connectivity.

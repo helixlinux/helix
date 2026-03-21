@@ -1291,6 +1291,8 @@ class HelixCLI:
             return self._daemon_shutdown()
         elif action == "run-tests":
             return self._daemon_run_tests(args)
+        elif action == "analyze-packages":
+            return self._daemon_analyze_packages()
         else:
             cx_print("Usage: helix daemon <command>", "info")
             return 0
@@ -1453,6 +1455,57 @@ class HelixCLI:
             cx_print("✅ Daemon shutdown initiated", "success")
             return 0
             
+        except DaemonNotInstalledError as e:
+            self._print_error(str(e))
+            return 1
+        except DaemonConnectionError as e:
+            self._print_error(str(e))
+            return 1
+
+    def _daemon_analyze_packages(self) -> int:
+        """Analyze system packages for outdated versions via daemon IPC."""
+        from rich.table import Table
+
+        try:
+            from helix.daemon_client import DaemonClient, DaemonConnectionError, DaemonNotInstalledError
+
+            cx_print("Analyzing packages...", "thinking")
+            client = DaemonClient()
+            response = client.analyze_packages()
+
+            if not response.success:
+                self._print_error(f"Package analysis failed: {response.error}")
+                return 1
+
+            packages = response.result.get("packages", [])
+
+            if not packages:
+                cx_print("All packages are up to date!", "success")
+                return 0
+
+            table = Table(
+                title=f"Outdated Packages ({len(packages)})",
+                show_header=True,
+                header_style="bold cyan",
+            )
+            table.add_column("Package", style="white")
+            table.add_column("Current", style="yellow")
+            table.add_column("Latest", style="green")
+
+            for pkg in packages:
+                table.add_row(
+                    pkg.get("name", ""),
+                    pkg.get("current_version", ""),
+                    pkg.get("latest_version", ""),
+                )
+
+            console.print()
+            console.print(table)
+            console.print()
+            cx_print(f"{len(packages)} package(s) can be upgraded.", "info")
+            cx_print("Run 'sudo apt upgrade' to update all packages.", "info")
+            return 0
+
         except DaemonNotInstalledError as e:
             self._print_error(str(e))
             return 1
@@ -1694,6 +1747,9 @@ def main():
 
     # daemon shutdown - uses shutdown IPC handler
     daemon_subs.add_parser("shutdown", help="Request daemon shutdown")
+
+    # daemon analyze-packages - list outdated packages via daemon
+    daemon_subs.add_parser("analyze-packages", help="List outdated packages on the system")
 
     # daemon run-tests - run daemon test suite
     daemon_run_tests_parser = daemon_subs.add_parser(

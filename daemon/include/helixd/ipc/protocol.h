@@ -81,7 +81,10 @@
      constexpr const char* LLM_LOAD = "llm.load";
      constexpr const char* LLM_UNLOAD = "llm.unload";
      constexpr const char* LLM_INFER = "llm.infer";
-     
+
+     // Package management
+     constexpr const char* PACKAGES_ANALYZE = "packages.analyze";
+
      // Daemon control
      constexpr const char* SHUTDOWN = "shutdown";
      constexpr const char* PING = "ping";

@@ -29,6 +29,9 @@ private:
     static Response handle_config_get(const Request& req);
     static Response handle_config_reload(const Request& req);
     
+    // Package management
+    static Response handle_packages_analyze(const Request& req);
+
     // Daemon control
     static Response handle_shutdown(const Request& req);
 };

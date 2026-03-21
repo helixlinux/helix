@@ -2,7 +2,9 @@ cmake_minimum_required(VERSION 3.20)
 project(helixd VERSION 1.0.0 LANGUAGES CXX)
 
 # CMake policies
-cmake_policy(SET CMP0135 NEW)
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+endif()
 
 # Require C++17
 set(CMAKE_CXX_STANDARD 17)
