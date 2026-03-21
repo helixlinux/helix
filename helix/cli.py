@@ -195,7 +195,7 @@ class HelixCLI:
         original_commands = list(commands)
 
         try:
-            answer = input("\nProceed with installation? [y/N]: ").strip().lower()
+            answer = input("\nProceed with installation? [Y/N]: ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print("\nCancelled.")
             return ("discard", commands)
