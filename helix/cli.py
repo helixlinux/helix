@@ -568,6 +568,122 @@ class HelixCLI:
 
     # ─── stack ──────────────────────────────────────────────────────────
 
+    def resolve(self, args: argparse.Namespace) -> int:
+        """Resolve dependency conflicts for Linux packages or parse resolver errors."""
+        from helix.dependency_resolver import DependencyResolver
+        from helix.error_parser import ErrorParser
+
+        if getattr(args, "error", None) or getattr(args, "error_file", None):
+            error_message = ""
+            if args.error_file:
+                try:
+                    with open(args.error_file, encoding="utf-8") as f:
+                        error_message = f.read()
+                except OSError as e:
+                    self._print_error(f"Could not read error file: {e}")
+                    return 1
+            else:
+                error_message = args.error
+
+            parser = ErrorParser()
+            analysis = parser.parse_error(error_message)
+
+            if args.json:
+                output = {
+                    "package_manager": parser.package_manager,
+                    "primary_category": analysis.primary_category.value,
+                    "severity": analysis.severity,
+                    "is_fixable": analysis.is_fixable,
+                    "suggested_fixes": analysis.suggested_fixes,
+                    "automatic_fix_available": analysis.automatic_fix_available,
+                    "automatic_fix_command": analysis.automatic_fix_command,
+                }
+                print(json.dumps(output, indent=2))
+                return 0
+
+            parser.print_analysis(analysis)
+            return 0
+
+        if not getattr(args, "package", None):
+            self._print_error("Please provide a package name or --error/--error-file input")
+            return 1
+
+        resolver = DependencyResolver()
+
+        if args.tree:
+            print(f"\n📦 Dependency tree for {args.package}:")
+            print("=" * 60)
+            resolver.print_dependency_tree(args.package)
+
+        plan = resolver.generate_conflict_resolution_plan(
+            args.package,
+            auto_remove_conflicts=args.auto_remove_conflicts,
+        )
+
+        if args.json:
+            print(json.dumps(plan, indent=2))
+            return 0
+
+        print(f"\n🛠️  Dependency conflict resolution plan for: {args.package}")
+        print("=" * 60)
+        print(f"Package manager: {plan['package_manager']}")
+        print(f"Dependency source: {plan.get('dependency_source', 'metadata')}")
+        print(f"Conflict source: {plan.get('conflict_source', 'metadata')}")
+        print(f"Conflicts detected: {plan['conflicts_detected']}")
+        print(f"Missing dependencies: {len(plan['missing_dependencies'])}")
+
+        if plan["conflicts"]:
+            print("\n⚠️  Conflicts:")
+            for pkg1, pkg2 in plan["conflicts"]:
+                print(f"  - {pkg1} conflicts with {pkg2}")
+            if plan["removable_conflicts"] and not args.auto_remove_conflicts:
+                cx_print(
+                    "Use --auto-remove-conflicts to include removal commands in the plan.",
+                    "warning",
+                )
+
+        if plan["resolution_commands"]:
+            print("\n💻 Resolution commands:")
+            for i, cmd in enumerate(plan["resolution_commands"], 1):
+                print(f"  {i}. {cmd}")
+        else:
+            cx_print("No resolver commands required. Dependencies appear satisfied.", "success")
+
+        if not args.apply:
+            cx_print("Dry run only. Re-run with --apply to execute the plan.", "info")
+            return 0
+
+        if not plan["safe_to_auto_apply"]:
+            self._print_error(
+                "Plan includes unresolved conflicts. Re-run with --auto-remove-conflicts if intended."
+            )
+            return 1
+
+        if not plan["resolution_commands"]:
+            return 0
+
+        def progress_callback(current: int, total: int, step: InstallationStep):
+            print(f"[{current}/{total}] {step.description}")
+            print(f"  Command: {step.command}")
+
+        coordinator = InstallationCoordinator(
+            commands=plan["resolution_commands"],
+            descriptions=[f"Resolve step {i + 1}" for i in range(len(plan["resolution_commands"]))],
+            timeout=300,
+            stop_on_error=True,
+            progress_callback=progress_callback,
+        )
+
+        result = coordinator.execute()
+        if result.success:
+            self._print_success("Dependency conflict resolution completed")
+            return 0
+
+        self._print_error("Dependency conflict resolution failed")
+        if result.error_message:
+            print(f"  Error: {result.error_message}", file=sys.stderr)
+        return 1
+
     def stack(self, args: argparse.Namespace) -> int:
         """Handle `helix stack` commands (list/describe/install/dry-run)."""
         try:
@@ -1076,6 +1192,7 @@ def show_rich_help():
 
     table.add_row("ask <question>", "Ask about your system")
     table.add_row("install <pkg>", "Install software")
+    table.add_row("resolve <pkg>", "Resolve dependency conflicts")
     table.add_row("uninstall <pkg>", "Remove installed software")
     table.add_row("stack <name>", "Install a pre-built stack")
     table.add_row("history", "View installation history")
@@ -1104,7 +1221,7 @@ def main():
         temp_parser.add_argument("command", nargs="?")
         temp_args, _ = temp_parser.parse_known_args()
 
-        NETWORK_COMMANDS = ["install", "uninstall", "update", "stack"]
+        NETWORK_COMMANDS = ["install", "uninstall", "resolve", "update", "stack"]
 
         if temp_args.command in NETWORK_COMMANDS:
             network.detect(check_quality=True)
@@ -1152,6 +1269,38 @@ def main():
         "--parallel",
         action="store_true",
         help="Enable parallel execution for multi-step installs",
+    )
+
+    # ── Resolve command ──
+    resolve_parser = subparsers.add_parser(
+        "resolve",
+        help="Resolve Linux dependency conflicts for a package",
+    )
+    resolve_parser.add_argument("package", nargs="?", help="Package name to resolve")
+    resolve_parser.add_argument(
+        "--tree",
+        action="store_true",
+        help="Show dependency tree before generating plan",
+    )
+    resolve_parser.add_argument(
+        "--auto-remove-conflicts",
+        action="store_true",
+        help="Include commands to remove conflicting packages",
+    )
+    resolve_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Execute generated resolution commands",
+    )
+    resolve_parser.add_argument("--json", action="store_true", help="Output JSON")
+    resolve_error_group = resolve_parser.add_mutually_exclusive_group()
+    resolve_error_group.add_argument(
+        "--error",
+        help="Parse an installation error message and suggest fixes",
+    )
+    resolve_error_group.add_argument(
+        "--error-file",
+        help="Read installation error from file and suggest fixes",
     )
 
     # ── Stack command ──
@@ -1245,6 +1394,8 @@ def main():
                 dry_run=args.dry_run,
                 parallel=args.parallel,
             )
+        elif args.command == "resolve":
+            return cli.resolve(args)
         elif args.command == "stack":
             return cli.stack(args)
         elif args.command == "config":
