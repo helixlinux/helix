@@ -235,12 +235,6 @@ class HelixCLI:
             # Extract packages from commands for tracking
             packages = history._extract_packages_from_commands(commands)
 
-            # Record installation start
-            if execute or dry_run:
-                install_id = history.record_installation(
-                    InstallationType.INSTALL, packages, commands, start_time
-                )
-
             # If JSON output requested, return structured data and exit early
             if json_output:
                 output = {
@@ -262,9 +256,13 @@ class HelixCLI:
                 if not execute:
                     print("To execute these commands, run with --execute flag")
                     print(f"Example: helix install {software} --execute")
-                if install_id:
-                    history.update_installation(install_id, InstallationStatus.SUCCESS)
                 return 0
+
+            # Only record to history when actually executing
+            if execute:
+                install_id = history.record_installation(
+                    InstallationType.INSTALL, packages, commands, start_time
+                )
 
             if execute:
 
@@ -485,11 +483,6 @@ class HelixCLI:
             # Extract packages from commands for tracking
             packages = history._extract_packages_from_commands(commands)
 
-            # Record removal start
-            install_id = history.record_installation(
-                InstallationType.REMOVE, packages, commands, start_time
-            )
-
             self._print_status("⚙️", f"Removing {software}...")
             print("\nGenerated commands:")
             for i, cmd in enumerate(commands, 1):
@@ -499,9 +492,12 @@ class HelixCLI:
             if not execute or dry_run:
                 print(f"\n(Dry-run completed. Use --execute to apply changes.)")
                 print(f"Example: helix uninstall {software} --execute")
-                if install_id:
-                    history.update_installation(install_id, InstallationStatus.SUCCESS)
                 return 0
+
+            # Only record to history when actually executing
+            install_id = history.record_installation(
+                InstallationType.REMOVE, packages, commands, start_time
+            )
 
             # Execute removal
             def progress_callback(current, total, step):

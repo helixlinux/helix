@@ -193,6 +193,9 @@ Rules:
 - Combine multiple pip packages into ONE pip install command
 - Combine multiple apt packages into ONE apt install command
 - NEVER repeat the same package or command
+- pip install does NOT support -y flag. Use 'pip install <packages>' without -y
+- pip uninstall DOES support -y flag. Use 'pip uninstall -y <packages>'
+- apt uses -y flag for both install and remove
 - For REMOVAL: use 'apt-get remove -y' for apt packages, 'pip uninstall -y' for pip packages
 - For REMOVAL: follow apt removals with 'sudo apt-get autoremove -y' to clean orphans
 - For REMOVAL: NEVER remove critical system packages (linux-image, libc6, systemd, bash, apt, dpkg)
@@ -211,7 +214,8 @@ Rules:
 5. Use package managers appropriate for Debian/Ubuntu systems (apt)
 6. Include necessary privilege escalation (sudo) when required
 7. Validate command syntax before returning
-8. Use the system hardware info below to make appropriate decisions:
+8. pip install does NOT support -y flag — use 'pip install <packages>' without -y. pip uninstall DOES support -y.
+9. Use the system hardware info below to make appropriate decisions:
    - If the user requests GPU/CUDA software, check if NVIDIA/AMD GPU is present
    - If CUDA is not available, prefer CPU-only alternatives
    - If ROCm is available, prefer AMD GPU packages over NVIDIA ones
