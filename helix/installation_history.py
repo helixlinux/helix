@@ -730,7 +730,7 @@ if __name__ == "__main__":
             record = history.get_installation(args.id)
 
             if not record:
-                print(f"❌ Installation {args.id} not found", file=sys.stderr)
+                print(f" Installation {args.id} not found", file=sys.stderr)
                 sys.exit(1)
 
             print(f"\nInstallation Details: {record.id}")
@@ -761,28 +761,28 @@ if __name__ == "__main__":
                 print("\nRollback actions (dry run):")
                 print(message)
             elif success:
-                print(f"✅ {message}")
+                print(f" {message}")
             else:
-                print(f"❌ {message}", file=sys.stderr)
+                print(f" {message}", file=sys.stderr)
                 exit_code = 1
 
         elif args.command == "export":
             history.export_history(args.file, args.format)
-            print(f"✅ History exported to {args.file}")
+            print(f" History exported to {args.file}")
 
         elif args.command == "cleanup":
             deleted = history.cleanup_old_records(args.days)
-            print(f"✅ Deleted {deleted} records older than {args.days} days")
+            print(f" Deleted {deleted} records older than {args.days} days")
 
         else:
             parser.print_help()
             exit_code = 1
 
     except KeyboardInterrupt:
-        print("\n❌ Operation cancelled by user", file=sys.stderr)
+        print("\n Operation cancelled by user", file=sys.stderr)
         sys.exit(130)
     except Exception as e:
-        print(f"❌ Error: {e}", file=sys.stderr)
+        print(f" Error: {e}", file=sys.stderr)
         logger.exception("CLI error")
         sys.exit(1)
 

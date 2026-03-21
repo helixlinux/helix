@@ -73,7 +73,7 @@ def cx_print(message: str, status: str = "info"):
     status_icons = {
         "info": "[dim]│[/dim]",
         "success": "[green]✓[/green]",
-        "warning": "[yellow]⚠[/yellow]",
+        "warning": "[yellow][/yellow]",
         "error": "[red]✗[/red]",
         "thinking": "[cyan]⠋[/cyan]",  # Spinner frame
     }
@@ -317,13 +317,13 @@ def cx_error(message: str) -> None:
 def cx_warning(message: str) -> None:
     """Print a warning message with warning icon."""
     console.print(
-        f"[{HELIX_WARNING}]⚠[/{HELIX_WARNING}] [{HELIX_WARNING}]{message}[/{HELIX_WARNING}]"
+        f"[{HELIX_WARNING}][/{HELIX_WARNING}] [{HELIX_WARNING}]{message}[/{HELIX_WARNING}]"
     )
 
 
 def cx_info(message: str) -> None:
     """Print an info message with info icon."""
-    console.print(f"[{HELIX_INFO}]ℹ[/{HELIX_INFO}] {message}")
+    console.print(f"[{HELIX_INFO}][/{HELIX_INFO}] {message}")
 
 
 def cx_spinner_message(message: str) -> None:

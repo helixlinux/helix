@@ -451,10 +451,10 @@ Acquire::https::Proxy "{https_proxy}";
         """
         cached = self.get_cached_packages()
         if cached:
-            console.print(f"[cyan]📦 Using cached package list ({len(cached)} packages)[/cyan]")
+            console.print(f"[cyan] Using cached package list ({len(cached)} packages)[/cyan]")
             return True
         else:
-            console.print("[yellow]⚠️ No cached packages available for offline mode[/yellow]")
+            console.print("[yellow] No cached packages available for offline mode[/yellow]")
             return False
 
     def cleanup_apt_proxy(self) -> bool:
@@ -471,7 +471,7 @@ Acquire::https::Proxy "{https_proxy}";
 
         try:
             subprocess.run(["sudo", "rm", str(conf_path)], check=True, stderr=subprocess.DEVNULL)
-            console.print("[dim]🧹 Cleaned up apt proxy configuration[/dim]")
+            console.print("[dim] Cleaned up apt proxy configuration[/dim]")
             return True
         except subprocess.CalledProcessError:
             return False
@@ -487,14 +487,14 @@ Acquire::https::Proxy "{https_proxy}";
         - Handle offline mode gracefully
         """
         if self.offline_mode:
-            console.print("[yellow]🔌 Offline mode - attempting to use cached packages[/yellow]")
+            console.print("[yellow] Offline mode - attempting to use cached packages[/yellow]")
             self.enable_offline_fallback()
             return
 
         # If no internet, inform user and try cache
         if not self.is_online:
             console.print(
-                "[yellow]⚠️ No internet connection detected - attempting offline mode[/yellow]"
+                "[yellow] No internet connection detected - attempting offline mode[/yellow]"
             )
             if not self.enable_offline_fallback():
                 console.print("[red]No cached packages available. Some operations may fail.[/red]")
@@ -519,7 +519,7 @@ Acquire::https::Proxy "{https_proxy}";
 
     def print_summary(self) -> None:
         """Print a summary of detected network configuration."""
-        console.print("\n[bold]🌐 Network Configuration[/bold]")
+        console.print("\n[bold] Network Configuration[/bold]")
 
         if self.proxy and self.proxy.get("http"):
             console.print(f"  Proxy: [cyan]{self.proxy['http']}[/cyan]")

@@ -615,22 +615,22 @@ class ErrorParser:
         print("ERROR ANALYSIS")
         print("=" * 60)
 
-        print(f"\n📋 Category: {analysis.primary_category.value}")
-        print(f"🧰 Package manager: {self.package_manager}")
-        print(f"⚠️  Severity: {analysis.severity.upper()}")
-        print(f"🔧 Fixable: {'Yes' if analysis.is_fixable else 'No'}")
+        print(f"\n Category: {analysis.primary_category.value}")
+        print(f" Package manager: {self.package_manager}")
+        print(f"  Severity: {analysis.severity.upper()}")
+        print(f" Fixable: {'Yes' if analysis.is_fixable else 'No'}")
 
         if analysis.matches:
-            print(f"\n✅ Matched {len(analysis.matches)} error pattern(s)")
+            print(f"\n Matched {len(analysis.matches)} error pattern(s)")
             for i, match in enumerate(analysis.matches, 1):
                 print(f"   {i}. {match.category.value} (confidence: {match.confidence:.0%})")
 
-        print("\n💡 Suggested Fixes:")
+        print("\n Suggested Fixes:")
         for i, fix in enumerate(analysis.suggested_fixes, 1):
             print(f"   {i}. {fix}")
 
         if analysis.automatic_fix_available:
-            print("\n🤖 Automatic Fix Available:")
+            print("\n Automatic Fix Available:")
             print(f"   {analysis.automatic_fix_command}")
 
         print("\n" + "=" * 60)

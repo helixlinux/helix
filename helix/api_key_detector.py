@@ -363,7 +363,7 @@ class APIKeyDetector:
         # Validate format
         detected = self._get_provider_from_key(key)
         if detected != provider:
-            cx_print(f"⚠️  Key doesn't match expected {provider_name} format", "warning")
+            cx_print(f"  Key doesn't match expected {provider_name} format", "warning")
             return None
 
         return key
@@ -706,7 +706,7 @@ def setup_api_key() -> tuple[bool, str | None, str | None]:
         default_location = str(Path.home() / HELIX_DIR / HELIX_ENV_FILE)
         if not silent and source != default_location:
             display_name = PROVIDER_DISPLAY_NAMES.get(provider, provider.upper())
-            cx_print(f"🔑 Found {display_name} API key in {source}", "success")
+            cx_print(f" Found {display_name} API key in {source}", "success")
         if not silent:
             detector._maybe_save_found_key(key, provider, source)
         return (True, key, provider)

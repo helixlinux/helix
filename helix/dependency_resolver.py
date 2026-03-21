@@ -679,12 +679,12 @@ class DependencyResolver:
         graph = self.resolve_dependencies(package_name, recursive=False)
 
         prefix = "  " * indent
-        status = "✅" if self.is_package_installed(package_name) else "❌"
+        status = "Done" if self.is_package_installed(package_name) else ""
         print(f"{prefix}{status} {package_name} [{graph.package_manager}]")
 
         for dep in graph.direct_dependencies:
             dep_prefix = "  " * (indent + 1)
-            dep_status = "✅" if dep.is_satisfied else "❌"
+            dep_status = "Done" if dep.is_satisfied else ""
             version_str = f" ({dep.installed_version})" if dep.installed_version else ""
             print(f"{dep_prefix}{dep_status} {dep.name}{version_str} - {dep.reason}")
 
@@ -735,12 +735,12 @@ if __name__ == "__main__":
     resolver = DependencyResolver()
 
     if args.tree:
-        print(f"\n📦 Dependency tree for {args.package}:")
+        print(f"\n Dependency tree for {args.package}:")
         print("=" * 60)
         resolver.print_dependency_tree(args.package)
 
     if args.plan:
-        print(f"\n📋 Installation plan for {args.package}:")
+        print(f"\n Installation plan for {args.package}:")
         print("=" * 60)
         plan = resolver.generate_install_plan(args.package)
 
@@ -749,27 +749,27 @@ if __name__ == "__main__":
         print(f"Dependency source: {plan['dependency_source']}")
         print(f"Conflict source: {plan['conflict_source']}")
         print(f"Total dependencies: {plan['total_dependencies']}")
-        print(f"✅ Already satisfied: {plan['satisfied_dependencies']}")
-        print(f"❌ Need to install: {plan['missing_dependencies']}")
+        print(f" Already satisfied: {plan['satisfied_dependencies']}")
+        print(f" Need to install: {plan['missing_dependencies']}")
 
         if plan["conflicts"]:
-            print("\n⚠️  Conflicts detected:")
+            print("\n  Conflicts detected:")
             for pkg1, pkg2 in plan["conflicts"]:
                 print(f"   - {pkg1} conflicts with {pkg2}")
 
-        print("\n📝 Installation order:")
+        print("\n Installation order:")
         for i, pkg in enumerate(plan["installation_order"], 1):
-            status = "✅" if resolver.is_package_installed(pkg) else "❌"
+            status = "" if resolver.is_package_installed(pkg) else ""
             print(f"   {i}. {status} {pkg}")
 
-        print(f"\n⏱️  Estimated time: {plan['estimated_time_minutes']:.1f} minutes")
+        print(f"\n  Estimated time: {plan['estimated_time_minutes']:.1f} minutes")
 
-        print("\n💻 Commands to run:")
+        print("\n Commands to run:")
         for cmd in plan["install_commands"]:
             print(f"   {cmd}")
 
     if args.resolve_conflicts:
-        print(f"\n🛠️  Conflict resolution plan for {args.package}:")
+        print(f"\n  Conflict resolution plan for {args.package}:")
         print("=" * 60)
         plan = resolver.generate_conflict_resolution_plan(
             args.package,
@@ -781,16 +781,16 @@ if __name__ == "__main__":
         print(f"Conflict source: {plan['conflict_source']}")
         print(f"Conflicts detected: {plan['conflicts_detected']}")
         if plan["conflicts"]:
-            print("\n⚠️  Conflicts:")
+            print("\n  Conflicts:")
             for pkg1, pkg2 in plan["conflicts"]:
-                print(f"   - {pkg1} ↔ {pkg2}")
+                print(f"   - {pkg1}  {pkg2}")
 
-        print("\n💻 Resolution commands:")
+        print("\n Resolution commands:")
         for cmd in plan["resolution_commands"]:
             print(f"   {cmd}")
 
     if args.missing:
-        print(f"\n❌ Missing dependencies for {args.package}:")
+        print(f"\n Missing dependencies for {args.package}:")
         print("=" * 60)
         missing = resolver.get_missing_dependencies(args.package)
 
@@ -806,7 +806,7 @@ if __name__ == "__main__":
     # Default: show summary
     if not any([args.tree, args.plan, args.resolve_conflicts, args.missing, args.export]):
         graph = resolver.resolve_dependencies(args.package)
-        print(f"\n📦 {args.package} - Dependency Summary")
+        print(f"\n {args.package} - Dependency Summary")
         print("=" * 60)
         print(f"Package manager: {graph.package_manager}")
         print(f"Dependency source: {graph.dependency_source}")
@@ -814,5 +814,5 @@ if __name__ == "__main__":
         print(f"Direct dependencies: {len(graph.direct_dependencies)}")
         print(f"Total dependencies: {len(graph.all_dependencies)}")
         satisfied = sum(1 for d in graph.all_dependencies if d.is_satisfied)
-        print(f"✅ Satisfied: {satisfied}")
-        print(f"❌ Missing: {len(graph.all_dependencies) - satisfied}")
+        print(f" Satisfied: {satisfied}")
+        print(f" Missing: {len(graph.all_dependencies) - satisfied}")

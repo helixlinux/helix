@@ -93,7 +93,7 @@ class StackManager:
         if not stack:
             return f"Stack '{stack_id}' not found"
 
-        output = f"\n📦 Stack: {stack['name']}\n"
+        output = f"\n Stack: {stack['name']}\n"
         output += f"Description: {stack['description']}\n\n"
         output += "Packages included:\n"
 

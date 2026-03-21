@@ -701,7 +701,7 @@ if __name__ == "__main__":
     detector = HardwareDetector(use_cache=False)
 
     # Quick detection
-    print("\n⚡ Quick Detection:")
+    print("\n Quick Detection:")
     start = time.time()
     quick = detector.detect_quick()
     print(f"  Time: {(time.time() - start) * 1000:.0f}ms")
@@ -711,23 +711,23 @@ if __name__ == "__main__":
     print(f"  Disk Free: {quick['disk_free_gb']} GB")
 
     # Full detection
-    print("\n🔍 Full Detection:")
+    print("\n Full Detection:")
     start = time.time()
     info = detector.detect()
     print(f"  Time: {(time.time() - start) * 1000:.0f}ms")
 
-    print("\n📋 System:")
+    print("\n System:")
     print(f"  Hostname: {info.hostname}")
     print(f"  Distro: {info.distro} {info.distro_version}")
     print(f"  Kernel: {info.kernel_version}")
 
-    print("\n🔧 CPU:")
+    print("\n CPU:")
     print(f"  Model: {info.cpu.model}")
     print(f"  Vendor: {info.cpu.vendor.value}")
     print(f"  Cores: {info.cpu.cores} ({info.cpu.threads} threads)")
     print(f"  Features: {', '.join(info.cpu.features[:5])}")
 
-    print("\n🎮 GPU:")
+    print("\n GPU:")
     for gpu in info.gpu:
         print(f"  {gpu.model}")
         if gpu.memory_mb:
@@ -737,21 +737,21 @@ if __name__ == "__main__":
     if not info.gpu:
         print("  No dedicated GPU detected")
 
-    print("\n💾 Memory:")
+    print("\n Memory:")
     print(f"  RAM: {info.memory.total_gb} GB ({info.memory.available_gb} GB available)")
     print(f"  Swap: {info.memory.swap_total_mb} MB")
 
-    print("\n💿 Storage:")
+    print("\n Storage:")
     for disk in info.storage[:3]:
         print(
             f"  {disk.mount_point}: {disk.available_gb:.1f} GB free / {disk.total_gb:.1f} GB ({disk.usage_percent}% used)"
         )
 
-    print("\n🌐 Network:")
+    print("\n Network:")
     for net in info.network:
         print(f"  {net.interface}: {net.ip_address} ({'wireless' if net.is_wireless else 'wired'})")
 
-    print("\n✨ Capabilities:")
+    print("\n Capabilities:")
     print(f"  NVIDIA GPU: {info.has_nvidia_gpu}")
     print(f"  CUDA Available: {info.cuda_available}")
     print(f"  AMD GPU: {info.has_amd_gpu}")
@@ -759,4 +759,4 @@ if __name__ == "__main__":
     if info.virtualization:
         print(f"  Virtualization: {info.virtualization}")
 
-    print("\n✅ Detection complete!")
+    print("\n Detection complete!")

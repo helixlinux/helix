@@ -64,12 +64,12 @@ def print_error(text: str) -> None:
 
 def print_warning(text: str) -> None:
     """Print warning message."""
-    print(f"{Colors.WARNING}⚠ {text}{Colors.ENDC}")
+    print(f"{Colors.WARNING} {text}{Colors.ENDC}")
 
 
 def print_info(text: str) -> None:
     """Print info message."""
-    print(f"{Colors.OKCYAN}ℹ {text}{Colors.ENDC}")
+    print(f"{Colors.OKCYAN} {text}{Colors.ENDC}")
 
 
 def check_ollama_installed() -> bool:
@@ -466,7 +466,7 @@ def main():
         print_info("No model selected. You can download one later with: ollama pull <model-name>")
         print_info("Configuring Helix to use Ollama...")
         configure_helix("llama3.2")  # Default model for future use
-        print_success("\nSetup complete! ✨")
+        print_success("\nSetup complete! ")
         print_info("\nNext steps:")
         print_info("  1. Download a model: ollama pull llama3.2")
         print_info("  2. Test Helix: helix install nginx --dry-run")
@@ -488,7 +488,7 @@ def main():
     configure_helix(model_name)
 
     # Success!
-    print_header("Setup Complete! ✨")
+    print_header("Setup Complete! ")
     print_success("Ollama is installed and configured for Helix Linux")
     print()
     print(f"{Colors.BOLD}Quick Start:{Colors.ENDC}")

@@ -154,16 +154,16 @@ class LLMRouter:
         if self.claude_api_key:
             self.claude_client = Anthropic(api_key=self.claude_api_key)
             self.claude_client_async = AsyncAnthropic(api_key=self.claude_api_key)
-            logger.info("✅ Claude API client initialized")
+            logger.info(" Claude API client initialized")
         else:
-            logger.warning("⚠️  No Claude API key provided")
+            logger.warning("  No Claude API key provided")
 
         if self.openai_api_key:
             self.openai_client = OpenAI(api_key=self.openai_api_key)
             self.openai_client_async = AsyncOpenAI(api_key=self.openai_api_key)
-            logger.info("✅ OpenAI API client initialized")
+            logger.info(" OpenAI API client initialized")
         else:
-            logger.warning("⚠️  No OpenAI API key provided")
+            logger.warning("  No OpenAI API key provided")
 
         # Initialize Ollama client (local inference)
         self.ollama_base_url = ollama_base_url or os.getenv(
@@ -182,9 +182,9 @@ class LLMRouter:
                 api_key="ollama",
                 base_url=f"{self.ollama_base_url}/v1",
             )
-            logger.info(f"✅ Ollama client initialized ({self.ollama_model})")
+            logger.info(f" Ollama client initialized ({self.ollama_model})")
         except Exception as e:
-            logger.warning(f"⚠️  Could not initialize Ollama client: {e}")
+            logger.warning(f"  Could not initialize Ollama client: {e}")
 
         # Rate limiting for parallel calls
         self._rate_limit_semaphore: asyncio.Semaphore | None = None
@@ -263,7 +263,7 @@ class LLMRouter:
         start_time = time.time()
 
         routing = self.route_task(task_type, force_provider)
-        logger.info(f"🧭 Routing: {routing.reasoning}")
+        logger.info(f" Routing: {routing.reasoning}")
 
         try:
             if routing.provider == LLMProvider.CLAUDE:
@@ -281,7 +281,7 @@ class LLMRouter:
             return response
 
         except Exception as e:
-            logger.error(f"❌ Error with {routing.provider.value}: {e}")
+            logger.error(f" Error with {routing.provider.value}: {e}")
 
             if self.enable_fallback:
                 fallback_provider = (
@@ -289,7 +289,7 @@ class LLMRouter:
                     if routing.provider == LLMProvider.CLAUDE
                     else LLMProvider.CLAUDE
                 )
-                logger.info(f"🔄 Attempting fallback to {fallback_provider.value}")
+                logger.info(f" Attempting fallback to {fallback_provider.value}")
 
                 return self.complete(
                     messages=messages,
@@ -504,7 +504,7 @@ class LLMRouter:
         start_time = time.time()
 
         routing = self.route_task(task_type, force_provider)
-        logger.info(f"🧭 Routing: {routing.reasoning}")
+        logger.info(f" Routing: {routing.reasoning}")
 
         try:
             if routing.provider == LLMProvider.CLAUDE:
@@ -522,7 +522,7 @@ class LLMRouter:
             return response
 
         except Exception as e:
-            logger.error(f"❌ Error with {routing.provider.value}: {e}")
+            logger.error(f" Error with {routing.provider.value}: {e}")
 
             if self.enable_fallback:
                 fallback_provider = (
@@ -530,7 +530,7 @@ class LLMRouter:
                     if routing.provider == LLMProvider.CLAUDE
                     else LLMProvider.CLAUDE
                 )
-                logger.info(f"🔄 Attempting fallback to {fallback_provider.value}")
+                logger.info(f" Attempting fallback to {fallback_provider.value}")
 
                 return await self.acomplete(
                     messages=messages,

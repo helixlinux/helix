@@ -202,7 +202,7 @@ class FirstRunWizard:
                 console.print()
                 console.print("[dim](Dry-run completed. Use --execute to apply changes.)[/dim]")
                 console.print()
-                console.print("[bold green]✅ API key verified successfully![/bold green]")
+                console.print("[bold green] API key verified successfully![/bold green]")
             else:
                 cx_print("LLM returned no commands.", "warning")
 

@@ -233,7 +233,7 @@ def setup_system_dependencies() -> bool:
         return True
 
     console.print(
-        f"\n[yellow]⚠ Missing {len(missing)} required package(s): {', '.join(missing)}[/yellow]"
+        f"\n[yellow] Missing {len(missing)} required package(s): {', '.join(missing)}[/yellow]"
     )
 
     if Confirm.ask("\nDo you want to install the missing dependencies now?", default=True):
