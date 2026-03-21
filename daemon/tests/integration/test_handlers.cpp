@@ -290,14 +290,18 @@ TEST_F(HandlersTest, HealthMethodNotAvailableInPR1) {
     EXPECT_EQ(response["error"]["code"], helixd::ErrorCodes::METHOD_NOT_FOUND);
 }
 
-TEST_F(HandlersTest, AlertsMethodNotAvailableInPR1) {
+TEST_F(HandlersTest, AlertsMethodReturnsAlertPayload) {
     start_server_with_handlers();
     
-    // Alerts handler is not registered in PR 1
+    // Alerts handler is implemented and should return a valid payload.
     auto response = send_json_request("alerts");
     
-    EXPECT_FALSE(response["success"]);
-    EXPECT_EQ(response["error"]["code"], helixd::ErrorCodes::METHOD_NOT_FOUND);
+    EXPECT_TRUE(response["success"]);
+    EXPECT_TRUE(response.contains("result"));
+    EXPECT_TRUE(response["result"].contains("package_manager"));
+    EXPECT_TRUE(response["result"].contains("has_alerts"));
+    EXPECT_TRUE(response["result"].contains("alerts"));
+    EXPECT_TRUE(response["result"].contains("missing_security_updates"));
 }
 
 // ============================================================================
