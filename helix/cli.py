@@ -42,10 +42,10 @@ logger = logging.getLogger(__name__)
 
 
 class HelixCLI:
-    def __init__(self, verbose: bool = False):
+    def __init__(self):
         self.spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
         self.spinner_idx = 0
-        self.verbose = verbose
+        self.verbose = False
 
     def _debug(self, message: str):
         """Print debug info only in verbose mode"""
@@ -1010,7 +1010,6 @@ def main():
 
     # Global flags
     parser.add_argument("--version", "-V", action="version", version=f"helix {VERSION}")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed output")
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -1124,7 +1123,7 @@ def main():
         return 0
 
     # Initialize the CLI handler
-    cli = HelixCLI(verbose=args.verbose)
+    cli = HelixCLI()
 
     try:
         if args.command == "ask":
@@ -1163,10 +1162,6 @@ def main():
         return 1
     except Exception as e:
         print(f"❌ Unexpected error: {e}", file=sys.stderr)
-        if "--verbose" in sys.argv or "-v" in sys.argv:
-            import traceback
-
-            traceback.print_exc()
         return 1
 
 

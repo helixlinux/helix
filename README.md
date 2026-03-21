@@ -106,6 +106,5 @@ helix config show
 ### Global options
 ```bash
 helix --version
-helix --verbose
 helix --help
 ```
