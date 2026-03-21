@@ -44,14 +44,13 @@ class FirstRunWizard:
         # 3. API key setup
         if provider == "ollama":
             cx_print("Using Ollama (local mode) — no API key required.", "success")
-            self.detector._save_provider_to_env("ollama")
+            self._save_provider_everywhere("ollama")
         else:
             if not self._configure_api_key(provider):
                 cx_print("Wizard cancelled. No API key configured.", "warning")
                 return 1
-            # Save provider preference to ~/.helix/.env only (never touch project .env)
             save_provider = "claude" if provider == "anthropic" else provider
-            self.detector._save_provider_to_env(save_provider)
+            self._save_provider_everywhere(save_provider)
 
         # 4. Verification dry-run
         self._verify_setup(provider)
@@ -138,13 +137,22 @@ class FirstRunWizard:
             cx_print("No key entered.", "warning")
             return False
 
-        # Save the key
+        # Save the key to both ~/.helix/.env and project .env
+        env_var = "ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENAI_API_KEY"
+        other_key_var = "OPENAI_API_KEY" if provider == "anthropic" else "ANTHROPIC_API_KEY"
+
         self.detector._save_key_to_env(new_key, provider)
-        cx_print(f"API key saved to ~/{HELIX_DIR}/{HELIX_ENV_FILE}", "success")
+
+        # Also write to project .env (highest priority) and clean stale keys
+        cwd_env = Path.cwd() / ".env"
+        self._clean_and_write_env(cwd_env, env_var, new_key, other_key_var)
+
+        cx_print(f"API key saved to ~/{HELIX_DIR}/{HELIX_ENV_FILE} and .env", "success")
 
         # Set in current process so verification works
-        env_var = "ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENAI_API_KEY"
         os.environ[env_var] = new_key
+        # Remove stale key from current process
+        os.environ.pop(other_key_var, None)
         console.print()
         return True
 
@@ -204,10 +212,31 @@ class FirstRunWizard:
 
     # ── Helpers ──────────────────────────────────────────────────────
 
-    def _save_provider(self, provider: str):
-        save_provider = "claude" if provider == "anthropic" else provider
-        self.detector._save_provider_to_env(save_provider)
-        os.environ["HELIX_PROVIDER"] = save_provider
+    def _save_provider_everywhere(self, provider: str):
+        """Save provider to both ~/.helix/.env and project .env."""
+        self.detector._save_provider_to_env(provider)
+        cwd_env = Path.cwd() / ".env"
+        self._update_env_file(cwd_env, "HELIX_PROVIDER", provider)
+        os.environ["HELIX_PROVIDER"] = provider
+
+    def _clean_and_write_env(self, env_path: Path, key_var: str, key_val: str, stale_var: str) -> None:
+        """Write API key to env file, removing any stale conflicting key."""
+        try:
+            lines = []
+            if env_path.exists():
+                lines = env_path.read_text().splitlines()
+
+            # Remove stale key and old value of current key
+            lines = [
+                l for l in lines
+                if not l.strip().startswith(f"{key_var}=")
+                and not l.strip().startswith(f"{stale_var}=")
+            ]
+
+            lines.append(f"{key_var}={key_val}")
+            env_path.write_text("\n".join(lines) + "\n")
+        except OSError:
+            pass
 
     def _detect_current_provider(self) -> str | None:
         explicit = os.environ.get("HELIX_PROVIDER", "").lower()
