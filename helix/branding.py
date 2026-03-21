@@ -29,12 +29,12 @@ HELIX_MUTED = "dim"
 
 # ASCII Logo - matches the CX circular logo
 LOGO_LARGE = """
-[bold cyan]   ██████╗██╗  ██╗[/bold cyan]
-[bold cyan]  ██╔════╝╚██╗██╔╝[/bold cyan]
-[bold cyan]  ██║      ╚███╔╝ [/bold cyan]
-[bold cyan]  ██║      ██╔██╗ [/bold cyan]
-[bold cyan]  ╚██████╗██╔╝ ██╗[/bold cyan]
-[bold cyan]   ╚═════╝╚═╝  ╚═╝[/bold cyan]
+[bold cyan]  ██╗  ██╗██╗  ██╗[/bold cyan]
+[bold cyan]  ██║  ██║╚██╗██╔╝[/bold cyan]
+[bold cyan]  ███████║ ╚███╔╝ [/bold cyan]
+[bold cyan]  ██╔══██║ ██╔██╗ [/bold cyan]
+[bold cyan]  ██║  ██║██╔╝ ██╗[/bold cyan]
+[bold cyan]  ╚═╝  ╚═╝╚═╝  ╚═╝[/bold cyan]
 """
 
 LOGO_SMALL = """[bold cyan]╔═╗─┐ ┬[/bold cyan]
