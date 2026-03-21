@@ -103,16 +103,6 @@ View current configuration.
 helix config show
 ```
 
-### update
-Check for and install Helix updates.
-```bash
-helix update check                  # Check for updates
-helix update install                # Install latest update
-helix update list                   # List available versions
-helix update backups                # List rollback points
-helix update rollback <backup_id>   # Restore previous version
-```
-
 ### Global options
 ```bash
 helix --version

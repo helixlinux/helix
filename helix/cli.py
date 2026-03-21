@@ -25,8 +25,6 @@ from helix.installation_history import (
 from helix.llm.interpreter import CommandInterpreter
 from helix.network_config import NetworkConfig
 from helix.stack_manager import StackManager
-from helix.update_checker import UpdateChannel, should_notify_update
-from helix.updater import Updater, UpdateStatus
 from helix.validators import validate_api_key, validate_install_request
 from helix.version_manager import get_version_string
 
@@ -799,241 +797,6 @@ class HelixCLI:
         console.print(f"Installed {len(packages)} packages")
         return 0
 
-    # ─── update ─────────────────────────────────────────────────────────
-
-    def update(self, args: argparse.Namespace) -> int:
-        """Handle the update command for self-updating Helix."""
-        from rich.progress import Progress, SpinnerColumn, TextColumn
-        from rich.table import Table
-
-        # Parse channel
-        channel_str = getattr(args, "channel", "stable")
-        try:
-            channel = UpdateChannel(channel_str)
-        except ValueError:
-            channel = UpdateChannel.STABLE
-
-        updater = Updater(channel=channel)
-
-        # Handle subcommands
-        action = getattr(args, "update_action", None)
-
-        if action == "check" or (not action and getattr(args, "check", False)):
-            cx_print("Checking for updates...", "thinking")
-            result = updater.check_update_available(force=True)
-
-            if result.error:
-                self._print_error(f"Update check failed: {result.error}")
-                return 1
-
-            console.print()
-            cx_print(f"Current version: [cyan]{result.current_version}[/cyan]", "info")
-
-            if result.update_available and result.latest_release:
-                cx_print(
-                    f"Update available: [green]{result.latest_version}[/green]",
-                    "success",
-                )
-                console.print()
-                console.print("[bold]Release notes:[/bold]")
-                console.print(result.latest_release.release_notes_summary)
-                console.print()
-                cx_print(
-                    "Run [bold]helix update install[/bold] to upgrade",
-                    "info",
-                )
-            else:
-                cx_print("Helix is up to date!", "success")
-
-            return 0
-
-        elif action == "install":
-            target = getattr(args, "version", None)
-            dry_run = getattr(args, "dry_run", False)
-
-            if dry_run:
-                cx_print("Dry run mode - no changes will be made", "warning")
-
-            cx_header("Helix Self-Update")
-
-            def progress_callback(message: str, percent: float) -> None:
-                if percent >= 0:
-                    cx_print(f"{message} ({percent:.0f}%)", "info")
-                else:
-                    cx_print(message, "info")
-
-            updater.progress_callback = progress_callback
-
-            result = updater.update(target_version=target, dry_run=dry_run)
-
-            console.print()
-
-            if result.success:
-                if result.status == UpdateStatus.SUCCESS:
-                    if result.new_version == result.previous_version:
-                        cx_print("Already up to date!", "success")
-                    else:
-                        cx_print(
-                            f"Updated: {result.previous_version} → {result.new_version}",
-                            "success",
-                        )
-                        if result.duration_seconds:
-                            console.print(f"[dim]Completed in {result.duration_seconds:.1f}s[/dim]")
-                elif result.status == UpdateStatus.PENDING:
-                    cx_print(
-                        f"Would update: {result.previous_version} → {result.new_version}",
-                        "info",
-                    )
-                return 0
-            else:
-                if result.status == UpdateStatus.ROLLED_BACK:
-                    cx_print("Update failed - rolled back to previous version", "warning")
-                else:
-                    self._print_error(f"Update failed: {result.error}")
-                return 1
-
-        elif action == "rollback":
-            backup_id = getattr(args, "backup_id", None)
-
-            backups = updater.list_backups()
-
-            if not backups:
-                self._print_error("No backups available for rollback")
-                return 1
-
-            if backup_id:
-                target_backup = None
-                for b in backups:
-                    if b.version == backup_id or str(b.path).endswith(backup_id):
-                        target_backup = b
-                        break
-
-                if not target_backup:
-                    self._print_error(f"Backup '{backup_id}' not found")
-                    return 1
-
-                backup_path = target_backup.path
-            else:
-                backup_path = backups[0].path
-
-            cx_print(f"Rolling back to backup: {backup_path.name}", "info")
-            result = updater.rollback_to_backup(backup_path)
-
-            if result.success:
-                cx_print(
-                    f"Rolled back: {result.previous_version} → {result.new_version}",
-                    "success",
-                )
-                return 0
-            else:
-                self._print_error(f"Rollback failed: {result.error}")
-                return 1
-
-        elif action == "list" or getattr(args, "list_releases", False):
-            from helix.update_checker import UpdateChecker
-
-            checker = UpdateChecker(channel=channel)
-            releases = checker.get_all_releases(limit=10)
-
-            if not releases:
-                cx_print("No releases found", "warning")
-                return 1
-
-            cx_header(f"Available Releases ({channel.value} channel)")
-
-            table = Table(show_header=True, header_style="bold cyan", box=None)
-            table.add_column("Version", style="green")
-            table.add_column("Date")
-            table.add_column("Channel")
-            table.add_column("Notes")
-
-            current = get_version_string()
-
-            for release in releases:
-                version_str = str(release.version)
-                if version_str == current:
-                    version_str = f"{version_str} [dim](current)[/dim]"
-
-                notes = release.name or release.body[:50] if release.body else ""
-                if len(notes) > 50:
-                    notes = notes[:47] + "..."
-
-                table.add_row(
-                    version_str,
-                    release.formatted_date,
-                    release.version.channel.value,
-                    notes,
-                )
-
-            console.print(table)
-            return 0
-
-        elif action == "backups":
-            backups = updater.list_backups()
-
-            if not backups:
-                cx_print("No backups available", "info")
-                return 0
-
-            cx_header("Available Backups")
-
-            table = Table(show_header=True, header_style="bold cyan", box=None)
-            table.add_column("Version", style="green")
-            table.add_column("Date")
-            table.add_column("Size")
-            table.add_column("Path")
-
-            for backup in backups:
-                size_mb = backup.size_bytes / (1024 * 1024)
-                size_str = f"{size_mb:.1f} MB"
-
-                try:
-                    dt = datetime.fromisoformat(backup.timestamp)
-                    date_str = dt.strftime("%Y-%m-%d %H:%M")
-                except ValueError:
-                    date_str = backup.timestamp[:16]
-
-                table.add_row(
-                    backup.version,
-                    date_str,
-                    size_str,
-                    str(backup.path.name),
-                )
-
-            console.print(table)
-            console.print()
-            cx_print(
-                "Use [bold]helix update rollback <version>[/bold] to restore",
-                "info",
-            )
-            return 0
-
-        else:
-            # Default: show current version and check for updates
-            cx_print(f"Current version: [cyan]{get_version_string()}[/cyan]", "info")
-            cx_print("Checking for updates...", "thinking")
-
-            result = updater.check_update_available()
-
-            if result.update_available and result.latest_release:
-                console.print()
-                cx_print(
-                    f"Update available: [green]{result.latest_version}[/green]",
-                    "success",
-                )
-                console.print()
-                console.print("[bold]What's new:[/bold]")
-                console.print(result.latest_release.release_notes_summary)
-                console.print()
-                cx_print(
-                    "Run [bold]helix update install[/bold] to upgrade",
-                    "info",
-                )
-            else:
-                cx_print("Helix is up to date!", "success")
-
-            return 0
-
     # ─── config ─────────────────────────────────────────────────────────
 
     def config(self, args: argparse.Namespace) -> int:
@@ -1207,7 +970,6 @@ def show_rich_help():
     table.add_row("stack <name>", "Install a pre-built stack")
     table.add_row("history", "View installation history")
     table.add_row("rollback <id>", "Undo a previous installation")
-    table.add_row("update", "Check for and install updates")
     table.add_row("config show", "Show configuration")
 
     console.print(table)
@@ -1231,7 +993,7 @@ def main():
         temp_parser.add_argument("command", nargs="?")
         temp_args, _ = temp_parser.parse_known_args()
 
-        NETWORK_COMMANDS = ["install", "uninstall", "resolve", "update", "stack"]
+        NETWORK_COMMANDS = ["install", "uninstall", "resolve", "stack"]
 
         if temp_args.command in NETWORK_COMMANDS:
             network.detect(check_quality=True)
@@ -1239,20 +1001,6 @@ def main():
 
     except Exception as e:
         console.print(f"[yellow]⚠️  Network auto-config failed: {e}[/yellow]")
-
-    # Check for updates on startup (cached, non-blocking)
-    try:
-        if temp_args.command not in ["update", None]:
-            update_release = should_notify_update()
-            if update_release:
-                console.print(
-                    f"[cyan]🔔 Helix update available:[/cyan] "
-                    f"[green]{update_release.version}[/green]"
-                )
-                console.print("   [dim]Run 'helix update' to upgrade[/dim]")
-                console.print()
-    except Exception:
-        pass
 
     parser = argparse.ArgumentParser(
         prog="helix",
@@ -1333,35 +1081,6 @@ def main():
     config_subs = config_parser.add_subparsers(dest="config_action", help="Configuration actions")
     config_subs.add_parser("show", help="Show all current configuration")
 
-    # ── Update command ──
-    update_parser = subparsers.add_parser("update", help="Check for and install Helix updates")
-    update_parser.add_argument(
-        "--channel",
-        "-c",
-        choices=["stable", "beta", "dev"],
-        default="stable",
-        help="Update channel (default: stable)",
-    )
-    update_subs = update_parser.add_subparsers(dest="update_action", help="Update actions")
-
-    update_subs.add_parser("check", help="Check for available updates")
-
-    update_install_parser = update_subs.add_parser("install", help="Install available update")
-    update_install_parser.add_argument(
-        "version", nargs="?", help="Specific version to install (default: latest)"
-    )
-    update_install_parser.add_argument(
-        "--dry-run", action="store_true", help="Show what would be updated without installing"
-    )
-
-    update_rollback_parser = update_subs.add_parser("rollback", help="Rollback to previous version")
-    update_rollback_parser.add_argument(
-        "backup_id", nargs="?", help="Backup ID or version to restore (default: most recent)"
-    )
-
-    update_subs.add_parser("list", help="List available versions")
-    update_subs.add_parser("backups", help="List available backups for rollback")
-
     # ── History command ──
     history_parser = subparsers.add_parser("history", help="View installation history")
     history_id_arg = history_parser.add_argument("show_id", nargs="?", help="Installation ID to show details")
@@ -1423,8 +1142,6 @@ def main():
             return cli.stack(args)
         elif args.command == "config":
             return cli.config(args)
-        elif args.command == "update":
-            return cli.update(args)
         elif args.command == "history":
             return cli.history(args.limit, args.status, getattr(args, "show_id", None), args.clear)
         elif args.command == "rollback":
