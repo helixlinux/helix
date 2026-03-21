@@ -1,3 +1,4 @@
+# PYTHON_ARGCOMPLETE_OK
 import argparse
 import json
 import logging
@@ -28,6 +29,13 @@ from helix.update_checker import UpdateChannel, should_notify_update
 from helix.updater import Updater, UpdateStatus
 from helix.validators import validate_api_key, validate_install_request
 from helix.version_manager import get_version_string
+
+try:
+    import argcomplete
+    from helix.completion import no_complete, stack_name_completer
+    _ARGCOMPLETE_AVAILABLE = True
+except ImportError:
+    _ARGCOMPLETE_AVAILABLE = False
 
 # Ensure helix package is importable when run from the repo root
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -1260,11 +1268,11 @@ def main():
 
     # ── Ask command ──
     ask_parser = subparsers.add_parser("ask", help="Ask a question about your system")
-    ask_parser.add_argument("question", type=str, help="Natural language question")
+    ask_question_arg = ask_parser.add_argument("question", type=str, help="Natural language question")
 
     # ── Install command ──
     install_parser = subparsers.add_parser("install", help="Install software")
-    install_parser.add_argument("software", type=str, help="Software to install")
+    install_software_arg = install_parser.add_argument("software", type=str, help="Software to install")
     install_parser.add_argument("--execute", action="store_true", help="Execute commands")
     install_parser.add_argument("--dry-run", action="store_true", help="Show commands only")
     install_parser.add_argument(
@@ -1307,7 +1315,7 @@ def main():
 
     # ── Stack command ──
     stack_parser = subparsers.add_parser("stack", help="Manage pre-built package stacks")
-    stack_parser.add_argument(
+    stack_name_arg = stack_parser.add_argument(
         "name", nargs="?", help="Stack name to install (ml, ml-cpu, webdev, devops, data)"
     )
     stack_group = stack_parser.add_mutually_exclusive_group()
@@ -1356,7 +1364,7 @@ def main():
 
     # ── History command ──
     history_parser = subparsers.add_parser("history", help="View installation history")
-    history_parser.add_argument("show_id", nargs="?", help="Installation ID to show details")
+    history_id_arg = history_parser.add_argument("show_id", nargs="?", help="Installation ID to show details")
     history_parser.add_argument("--limit", type=int, default=20, help="Number of records to show (default: 20)")
     history_parser.add_argument(
         "--status", choices=["success", "failed"], help="Filter by status"
@@ -1367,17 +1375,27 @@ def main():
 
     # ── Rollback command ──
     rollback_parser = subparsers.add_parser("rollback", help="Rollback a previous installation")
-    rollback_parser.add_argument("id", help="Installation ID to rollback")
+    rollback_id_arg = rollback_parser.add_argument("id", help="Installation ID to rollback")
     rollback_parser.add_argument("--dry-run", action="store_true", help="Show what would be rolled back")
 
     # ── Uninstall command ──
     uninstall_parser = subparsers.add_parser("uninstall", help="Remove installed software")
-    uninstall_parser.add_argument("software", type=str, help="Software to remove")
+    uninstall_software_arg = uninstall_parser.add_argument("software", type=str, help="Software to remove")
     uninstall_parser.add_argument("--execute", action="store_true", help="Execute removal (dry-run is default)")
     uninstall_parser.add_argument("--dry-run", action="store_true", help="Show commands only (default)")
 
     # Wizard
     subparsers.add_parser("wizard", help="Run the first-run setup wizard (API key configuration)")
+
+    # ── Shell completion ──
+    if _ARGCOMPLETE_AVAILABLE:
+        ask_question_arg.completer = no_complete
+        install_software_arg.completer = no_complete
+        stack_name_arg.completer = stack_name_completer
+        history_id_arg.completer = no_complete
+        rollback_id_arg.completer = no_complete
+        uninstall_software_arg.completer = no_complete
+        argcomplete.autocomplete(parser)
 
     # ── Parse and route ──
     args = parser.parse_args()

@@ -21,5 +21,6 @@ setup(
         "cryptography>=42.0.0",
         "rich>=13.0.0",
         "typing-extensions>=4.0.0",
+        "argcomplete>=3.0.0",
     ],
 )
