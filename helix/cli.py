@@ -815,6 +815,112 @@ class HelixCLI:
 
         return 0
 
+    def history(self, limit: int = 20, status: str | None = None, show_id: str | None = None):
+        """Show installation history"""
+        history = InstallationHistory()
+
+        try:
+            if show_id:
+                record = history.get_installation(show_id)
+
+                if not record:
+                    self._print_error(f"Installation {show_id} not found")
+                    return 1
+
+                console.print(f"\n[bold]Installation Details: {record.id}[/bold]")
+                console.print("=" * 60)
+                console.print(f"Timestamp:  {record.timestamp}")
+                console.print(f"Operation:  {record.operation_type.value}")
+                console.print(f"Status:     {record.status.value}")
+                if record.duration_seconds:
+                    console.print(f"Duration:   {record.duration_seconds:.2f}s")
+                else:
+                    console.print("Duration:   N/A")
+                console.print(f"\nPackages:   {', '.join(record.packages)}")
+
+                if record.error_message:
+                    console.print(f"\n[red]Error: {record.error_message}[/red]")
+
+                if record.commands_executed:
+                    console.print("\n[bold]Commands executed:[/bold]")
+                    for cmd in record.commands_executed:
+                        console.print(f"  {cmd}")
+
+                console.print(f"\nRollback available: {record.rollback_available}")
+                return 0
+            else:
+                status_filter = InstallationStatus(status) if status else None
+                records = history.get_history(limit, status_filter)
+
+                if not records:
+                    cx_print("No installation records found.", "info")
+                    return 0
+
+                from rich.table import Table
+
+                table = Table(show_header=True, header_style="bold cyan", box=None)
+                table.add_column("ID", style="green")
+                table.add_column("Date")
+                table.add_column("Operation")
+                table.add_column("Packages")
+                table.add_column("Status")
+
+                for r in records:
+                    date = r.timestamp[:19].replace("T", " ")
+                    packages = ", ".join(r.packages[:2])
+                    if len(r.packages) > 2:
+                        packages += f" +{len(r.packages) - 2}"
+
+                    status_style = "green" if r.status == InstallationStatus.SUCCESS else "red"
+                    table.add_row(
+                        r.id,
+                        date,
+                        r.operation_type.value,
+                        packages,
+                        f"[{status_style}]{r.status.value}[/{status_style}]",
+                    )
+
+                console.print(table)
+                return 0
+        except (ValueError, OSError) as e:
+            self._print_error(f"Failed to retrieve history: {str(e)}")
+            return 1
+        except Exception as e:
+            self._print_error(f"Unexpected error retrieving history: {str(e)}")
+            if self.verbose:
+                import traceback
+
+                traceback.print_exc()
+            return 1
+
+    def rollback(self, install_id: str, dry_run: bool = False):
+        """Rollback an installation"""
+        history = InstallationHistory()
+
+        try:
+            success, message = history.rollback(install_id, dry_run)
+
+            if dry_run:
+                cx_header("Rollback actions (dry run)")
+                console.print(message)
+                return 0
+            elif success:
+                self._print_success(message)
+                return 0
+            else:
+                self._print_error(message)
+                return 1
+        except (ValueError, OSError) as e:
+            self._print_error(f"Rollback failed: {str(e)}")
+            return 1
+        except Exception as e:
+            self._print_error(f"Unexpected rollback error: {str(e)}")
+            if self.verbose:
+                import traceback
+
+                traceback.print_exc()
+            return 1
+
 
 # ─── help display ───────────────────────────────────────────────────────
 
@@ -836,6 +942,8 @@ def show_rich_help():
     table.add_row("ask <question>", "Ask about your system")
     table.add_row("install <pkg>", "Install software")
     table.add_row("stack <name>", "Install a pre-built stack")
+    table.add_row("history", "View installation history")
+    table.add_row("rollback <id>", "Undo a previous installation")
     table.add_row("update", "Check for and install updates")
     table.add_row("config show", "Show configuration")
 
@@ -959,6 +1067,19 @@ def main():
     update_subs.add_parser("list", help="List available versions")
     update_subs.add_parser("backups", help="List available backups for rollback")
 
+    # ── History command ──
+    history_parser = subparsers.add_parser("history", help="View installation history")
+    history_parser.add_argument("show_id", nargs="?", help="Installation ID to show details")
+    history_parser.add_argument("--limit", type=int, default=20, help="Number of records to show (default: 20)")
+    history_parser.add_argument(
+        "--status", choices=["success", "failed"], help="Filter by status"
+    )
+
+    # ── Rollback command ──
+    rollback_parser = subparsers.add_parser("rollback", help="Rollback a previous installation")
+    rollback_parser.add_argument("id", help="Installation ID to rollback")
+    rollback_parser.add_argument("--dry-run", action="store_true", help="Show what would be rolled back")
+
     # ── Parse and route ──
     args = parser.parse_args()
 
@@ -985,6 +1106,10 @@ def main():
             return cli.config(args)
         elif args.command == "update":
             return cli.update(args)
+        elif args.command == "history":
+            return cli.history(args.limit, args.status, getattr(args, "show_id", None))
+        elif args.command == "rollback":
+            return cli.rollback(args.id, args.dry_run)
         else:
             parser.print_help()
             return 1

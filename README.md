@@ -73,6 +73,22 @@ helix stack webdev --dry-run        # Preview
 helix stack webdev --execute        # Install
 ```
 
+### history
+View installation history. Every install/rollback is tracked in a local SQLite database.
+```bash
+helix history                       # List recent installations
+helix history --limit 5             # Show last 5 records
+helix history --status success      # Filter by status (success/failed)
+helix history <id>                  # Show details of a specific installation
+```
+
+### rollback
+Undo a previous installation. Compares before/after package snapshots and restores the previous state.
+```bash
+helix rollback <id> --dry-run       # Preview what would be rolled back
+helix rollback <id>                 # Execute the rollback
+```
+
 ### config
 View current configuration.
 ```bash
