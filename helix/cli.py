@@ -459,8 +459,12 @@ class HelixCLI:
                                             print(f"  {tr.result.value}: {tr.name} — {tr.message}")
                                     return 1
                                 else:
-                                    # Auto mode — warn and fall through to direct execution
-                                    cx_print(f"[sandbox] Test failed ({sandbox_result.message}). Falling back to direct install.", "warning")
+                                    # Auto mode — command failed in sandbox, don't run broken commands on host
+                                    error_msg = f"Sandbox failed: {sandbox_result.message}"
+                                    if install_id:
+                                        history.update_installation(install_id, InstallationStatus.FAILED, error_msg)
+                                    self._print_error(error_msg)
+                                    return 1
                         elif use_sandbox is True:
                             self._print_error("Docker not available. Install Docker or use --no-sandbox.")
                             return 1
