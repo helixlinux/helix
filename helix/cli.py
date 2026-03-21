@@ -1104,7 +1104,7 @@ def main():
         temp_parser.add_argument("command", nargs="?")
         temp_args, _ = temp_parser.parse_known_args()
 
-        NETWORK_COMMANDS = ["install", "update", "stack"]
+        NETWORK_COMMANDS = ["install", "uninstall", "update", "stack"]
 
         if temp_args.command in NETWORK_COMMANDS:
             network.detect(check_quality=True)
