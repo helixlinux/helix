@@ -645,6 +645,21 @@ class InstallationHistory:
             logger.error(f"Failed to cleanup records: {e}")
             return 0
 
+    def clear_all(self) -> int:
+        """Delete all installation history records. Returns number of records deleted."""
+        try:
+            with self._pool.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM installations")
+                count = cursor.fetchone()[0]
+                cursor.execute("DELETE FROM installations")
+                conn.commit()
+                logger.info(f"Cleared all {count} records")
+            return count
+        except Exception as e:
+            logger.error(f"Failed to clear history: {e}")
+            return 0
+
 
 # CLI Interface
 if __name__ == "__main__":

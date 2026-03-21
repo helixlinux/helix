@@ -439,6 +439,137 @@ class HelixCLI:
                 traceback.print_exc()
             return 1
 
+    # ─── uninstall ────────────────────────────────────────────────────
+
+    def uninstall(
+        self,
+        software: str,
+        execute: bool = False,
+        dry_run: bool = False,
+    ):
+        """Remove a package using the appropriate package manager."""
+        history = InstallationHistory()
+        install_id = None
+        start_time = datetime.now()
+
+        # Validate input
+        is_valid, error = validate_install_request(software)
+        if not is_valid:
+            self._print_error(error)
+            return 1
+
+        api_key = self._get_api_key()
+        if not api_key:
+            self._print_error("No API key found. Please configure an API provider.")
+            return 1
+
+        provider = self._get_provider()
+        self._debug(f"Using provider: {provider}")
+
+        try:
+            self._print_status("🧠", "Understanding removal request...")
+
+            interpreter = CommandInterpreter(api_key=api_key, provider=provider)
+
+            self._print_status("🗑️", "Planning removal...")
+            for _ in range(10):
+                self._animate_spinner("Analyzing dependencies...")
+            self._clear_line()
+
+            commands = interpreter.parse(f"uninstall {software}")
+
+            if not commands:
+                self._print_error("No commands generated")
+                return 1
+
+            # Extract packages from commands for tracking
+            packages = history._extract_packages_from_commands(commands)
+
+            # Record removal start
+            install_id = history.record_installation(
+                InstallationType.REMOVE, packages, commands, start_time
+            )
+
+            self._print_status("⚙️", f"Removing {software}...")
+            print("\nGenerated commands:")
+            for i, cmd in enumerate(commands, 1):
+                print(f"  {i}. {cmd}")
+
+            # Dry-run is the default for uninstall (destructive operation)
+            if not execute or dry_run:
+                print(f"\n(Dry-run completed. Use --execute to apply changes.)")
+                print(f"Example: helix uninstall {software} --execute")
+                if install_id:
+                    history.update_installation(install_id, InstallationStatus.SUCCESS)
+                return 0
+
+            # Execute removal
+            def progress_callback(current, total, step):
+                status_emoji = "⏳"
+                if step.status == StepStatus.SUCCESS:
+                    status_emoji = "✅"
+                elif step.status == StepStatus.FAILED:
+                    status_emoji = "❌"
+                print(f"\n[{current}/{total}] {status_emoji} {step.description}")
+                print(f"  Command: {step.command}")
+
+            print(f"\nExecuting removal...")
+
+            coordinator = InstallationCoordinator(
+                commands=commands,
+                descriptions=[f"Step {i + 1}" for i in range(len(commands))],
+                timeout=300,
+                stop_on_error=True,
+                progress_callback=progress_callback,
+            )
+
+            result = coordinator.execute()
+
+            if result.success:
+                self._print_success(f"{software} removed successfully")
+                print(f"\nCompleted in {result.total_duration:.2f} seconds")
+
+                if install_id:
+                    history.update_installation(install_id, InstallationStatus.SUCCESS)
+                    print(f"\n📝 Removal recorded (ID: {install_id})")
+                return 0
+            else:
+                if install_id:
+                    error_msg = result.error_message or "Removal failed"
+                    history.update_installation(
+                        install_id, InstallationStatus.FAILED, error_msg
+                    )
+
+                if result.failed_step is not None:
+                    self._print_error(f"Removal failed at step {result.failed_step + 1}")
+                else:
+                    self._print_error("Removal failed")
+                if result.error_message:
+                    print(f"  Error: {result.error_message}", file=sys.stderr)
+                if install_id:
+                    print(f"\n📝 Removal recorded (ID: {install_id})")
+                return 1
+
+        except ValueError as e:
+            if install_id:
+                history.update_installation(install_id, InstallationStatus.FAILED, str(e))
+            self._print_error(str(e))
+            return 1
+        except RuntimeError as e:
+            if install_id:
+                history.update_installation(install_id, InstallationStatus.FAILED, str(e))
+            self._print_error(f"API call failed: {str(e)}")
+            return 1
+        except Exception as e:
+            if install_id:
+                history.update_installation(install_id, InstallationStatus.FAILED, str(e))
+            self._print_error(f"Unexpected error: {str(e)}")
+            if self.verbose:
+                import traceback
+
+                traceback.print_exc()
+            return 1
+
     # ─── stack ──────────────────────────────────────────────────────────
 
     def stack(self, args: argparse.Namespace) -> int:
@@ -815,11 +946,19 @@ class HelixCLI:
 
         return 0
 
-    def history(self, limit: int = 20, status: str | None = None, show_id: str | None = None):
+    def history(self, limit: int = 20, status: str | None = None, show_id: str | None = None, clear: bool = False):
         """Show installation history"""
         history = InstallationHistory()
 
         try:
+            if clear:
+                deleted = history.clear_all()
+                if deleted > 0:
+                    self._print_success(f"Cleared {deleted} history record(s)")
+                else:
+                    cx_print("No history records to clear.", "info")
+                return 0
+
             if show_id:
                 record = history.get_installation(show_id)
 
@@ -941,6 +1080,7 @@ def show_rich_help():
 
     table.add_row("ask <question>", "Ask about your system")
     table.add_row("install <pkg>", "Install software")
+    table.add_row("uninstall <pkg>", "Remove installed software")
     table.add_row("stack <name>", "Install a pre-built stack")
     table.add_row("history", "View installation history")
     table.add_row("rollback <id>", "Undo a previous installation")
@@ -1074,11 +1214,20 @@ def main():
     history_parser.add_argument(
         "--status", choices=["success", "failed"], help="Filter by status"
     )
+    history_parser.add_argument(
+        "--clear", action="store_true", help="Delete all installation history"
+    )
 
     # ── Rollback command ──
     rollback_parser = subparsers.add_parser("rollback", help="Rollback a previous installation")
     rollback_parser.add_argument("id", help="Installation ID to rollback")
     rollback_parser.add_argument("--dry-run", action="store_true", help="Show what would be rolled back")
+
+    # ── Uninstall command ──
+    uninstall_parser = subparsers.add_parser("uninstall", help="Remove installed software")
+    uninstall_parser.add_argument("software", type=str, help="Software to remove")
+    uninstall_parser.add_argument("--execute", action="store_true", help="Execute removal (dry-run is default)")
+    uninstall_parser.add_argument("--dry-run", action="store_true", help="Show commands only (default)")
 
     # ── Parse and route ──
     args = parser.parse_args()
@@ -1107,9 +1256,11 @@ def main():
         elif args.command == "update":
             return cli.update(args)
         elif args.command == "history":
-            return cli.history(args.limit, args.status, getattr(args, "show_id", None))
+            return cli.history(args.limit, args.status, getattr(args, "show_id", None), args.clear)
         elif args.command == "rollback":
             return cli.rollback(args.id, args.dry_run)
+        elif args.command == "uninstall":
+            return cli.uninstall(args.software, execute=args.execute, dry_run=args.dry_run)
         else:
             parser.print_help()
             return 1

@@ -180,6 +180,12 @@ Example output: {"commands": ["sudo apt update", "sudo apt install -y nginx"]}
 Example input: install pytorch cuda jupyter numpy pandas matplotlib
 Example output: {"commands": ["sudo apt update", "sudo apt install -y python3-pip python3-venv", "pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu", "pip install jupyter numpy pandas matplotlib"]}
 
+Example input: uninstall nginx
+Example output: {"commands": ["sudo apt-get remove -y nginx", "sudo apt-get autoremove -y"]}
+
+Example input: uninstall flask
+Example output: {"commands": ["pip uninstall -y flask"]}
+
 Rules:
 - Use apt for Ubuntu packages
 - Add sudo for system commands
@@ -187,6 +193,9 @@ Rules:
 - Combine multiple pip packages into ONE pip install command
 - Combine multiple apt packages into ONE apt install command
 - NEVER repeat the same package or command
+- For REMOVAL: use 'apt-get remove -y' for apt packages, 'pip uninstall -y' for pip packages
+- For REMOVAL: follow apt removals with 'sudo apt-get autoremove -y' to clean orphans
+- For REMOVAL: NEVER remove critical system packages (linux-image, libc6, systemd, bash, apt, dpkg)
 - Return ONLY the JSON object"""
             if hw:
                 base += f"\n\nSystem hardware:\n{hw}"
@@ -212,7 +221,18 @@ Format:
 {"commands": ["command1", "command2", ...]}
 
 Example request: "install docker with nvidia support"
-Example response: {"commands": ["sudo apt update", "sudo apt install -y docker.io", "sudo apt install -y nvidia-docker2", "sudo systemctl restart docker"]}"""
+Example response: {"commands": ["sudo apt update", "sudo apt install -y docker.io", "sudo apt install -y nvidia-docker2", "sudo systemctl restart docker"]}
+
+Example request: "uninstall nginx"
+Example response: {"commands": ["sudo apt-get remove -y nginx", "sudo apt-get autoremove -y"]}
+
+Example request: "uninstall flask"
+Example response: {"commands": ["pip uninstall -y flask"]}
+
+Removal rules:
+- Use 'apt-get remove -y' for system packages, 'pip uninstall -y' for pip packages
+- Follow apt removals with 'sudo apt-get autoremove -y' to clean orphaned dependencies
+- NEVER remove critical system packages (linux-image, libc6, systemd, bash, apt, dpkg)"""
         if hw:
             base += f"\n\nSystem hardware:\n{hw}"
         return base
