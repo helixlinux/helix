@@ -1058,6 +1058,40 @@ class HelixCLI:
 
         return 0
 
+    # ─── configure ──────────────────────────────────────────────────────
+
+    def configure(self, args: argparse.Namespace) -> int:
+        """Auto-generate config files for the current project or a named service."""
+        from helix.configure import ProjectConfigurator
+
+        api_key = self._get_api_key()
+        if not api_key:
+            return 1
+
+        provider = self._get_provider()
+        self._debug(f"Using provider: {provider}")
+
+        cx_header("Project Configuration")
+
+        try:
+            configurator = ProjectConfigurator(api_key=api_key, provider=provider)
+            return configurator.run(
+                project_dir=Path.cwd(),
+                target=getattr(args, "target", None),
+                dry_run=getattr(args, "dry_run", False),
+                force=getattr(args, "force", False),
+                only=getattr(args, "only", None),
+            )
+        except KeyboardInterrupt:
+            cx_print("Configuration cancelled.", "info")
+            return 130
+        except Exception as e:
+            self._print_error(f"Configuration failed: {e}")
+            if self.verbose:
+                import traceback
+                traceback.print_exc()
+            return 1
+
     # ─── edits ──────────────────────────────────────────────────────────
 
     def _run_edited_commands(self, edit: dict) -> int:
@@ -1735,6 +1769,7 @@ def show_rich_help():
     table.add_row("edits", "Browse and re-run edited command history")
     table.add_row("rollback <id>", "Undo a previous installation")
     table.add_row("config show", "Show configuration")
+    table.add_row("configure [service]", "Auto-generate config files for project or service")
 
     console.print(table)
     console.print()
@@ -1951,6 +1986,33 @@ def main():
     sandbox_sub.add_parser("status", help="Show Docker availability and active sandboxes")
     sandbox_sub.add_parser("cleanup", help="Remove all sandbox containers")
 
+    # ── Configure command ──
+    configure_parser = subparsers.add_parser(
+        "configure",
+        help="Auto-generate config files for the current project or a named service",
+    )
+    configure_parser.add_argument(
+        "target",
+        nargs="?",
+        default=None,
+        help="Optional service/tool to configure (e.g. 'samba', 'nginx'). Omit to auto-detect.",
+    )
+    configure_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be created without writing files",
+    )
+    configure_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing config files",
+    )
+    configure_parser.add_argument(
+        "--only",
+        metavar="TYPE",
+        help="Only generate configs of this type: linting, docker, env, framework, tooling, general, service",
+    )
+
     # Wizard
     subparsers.add_parser("wizard", help="Run the first-run setup wizard (API key configuration)")
 
@@ -2009,6 +2071,8 @@ def main():
             return cli.daemon(args)
         elif args.command == "sandbox":
             return cli.sandbox(getattr(args, "sandbox_action", None))
+        elif args.command == "configure":
+            return cli.configure(args)
         elif args.command == "wizard":
             from helix.first_run_wizard import FirstRunWizard
             wizard = FirstRunWizard()
