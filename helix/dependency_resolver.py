@@ -9,9 +9,22 @@ import logging
 import re
 import shutil
 import subprocess
+import sys
 import threading
+from collections import defaultdict
 from dataclasses import asdict, dataclass
 from enum import Enum
+from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover
+    tomllib = None
+
+try:
+    from packaging.requirements import Requirement
+except ImportError:  # pragma: no cover
+    Requirement = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,6 +40,17 @@ class LinuxPackageManager(str, Enum):
     ZYPPER = "zypper"
     APK = "apk"
     UNKNOWN = "unknown"
+
+
+class PackageEcosystem(str, Enum):
+    """Supported dependency ecosystems."""
+
+    LINUX = "linux"
+    PYTHON = "python"
+    NPM = "npm"
+    CARGO = "cargo"
+    RUBY = "ruby"
+    ALL = "all"
 
 
 @dataclass
@@ -136,11 +160,11 @@ class DependencyResolver:
     KNOWN_CONFLICTS = {
         "mysql-server": ["mariadb-server"],
         "mariadb-server": ["mysql-server"],
-        "apache2": ["nginx"],
-        "nginx": ["apache2"],
         "docker": ["podman-docker"],
         "podman-docker": ["docker"],
     }
+
+    VERSION_TOKEN = re.compile(r"(<=|>=|==|!=|~=|<|>)\s*([^,\s;]+)")
 
     def __init__(self):
         self._cache_lock = threading.Lock()  # Protect dependency_cache
@@ -281,12 +305,126 @@ class DependencyResolver:
     def _normalize_dependency_name(self, raw_name: str) -> str:
         """Normalize dependency token from package-manager output."""
         dep_name = raw_name.strip()
+        dep_name = dep_name.split("[", 1)[0].strip()
         dep_name = re.sub(r":([a-z0-9_+-]+)$", "", dep_name)
         dep_name = re.sub(r"\s*\(.*?\)", "", dep_name)
         dep_name = re.sub(r"[<>=].*$", "", dep_name)
+        dep_name = re.sub(r"\s+", " ", dep_name)
         if "/" in dep_name or dep_name.startswith("rpmlib("):
             return ""
         return dep_name.strip()
+
+    def _parse_control_style_fields(self, output: str, fields: set[str]) -> list[str]:
+        """Parse RFC822-like package metadata fields (APT, Pacman, Zypper)."""
+        values: list[str] = []
+        current_field = ""
+
+        for raw_line in output.splitlines():
+            line = raw_line.rstrip()
+            if not line:
+                current_field = ""
+                continue
+
+            if line[0].isspace() and current_field in fields:
+                values.append(line.strip())
+                continue
+
+            if ":" not in line:
+                current_field = ""
+                continue
+
+            key, value = line.split(":", 1)
+            key = key.strip().lower()
+            current_field = key
+            if key in fields and value.strip():
+                values.append(value.strip())
+
+        return values
+
+    def _extract_names_from_relation_string(self, raw_value: str) -> set[str]:
+        """Extract package names from metadata relation lists."""
+        names: set[str] = set()
+        for part in re.split(r"[,|]", raw_value):
+            name = self._normalize_dependency_name(part)
+            if name:
+                names.add(name)
+        return names
+
+    def _version_key(self, version: str) -> tuple[int, ...]:
+        """Build a coarse comparable tuple from a version string."""
+        numbers = re.findall(r"\d+", version)
+        if not numbers:
+            return (0,)
+        return tuple(int(piece) for piece in numbers[:6])
+
+    def _summarize_constraint_bounds(self, constraints: list[str]) -> dict[str, object]:
+        """Compute coarse lower/upper bounds for a list of constraints."""
+        lower: tuple[tuple[int, ...], bool, str] | None = None
+        upper: tuple[tuple[int, ...], bool, str] | None = None
+        pins: set[str] = set()
+
+        for constraint in constraints:
+            for operator, version in self.VERSION_TOKEN.findall(constraint):
+                if operator == "==":
+                    pins.add(version)
+                    key = self._version_key(version)
+                    lower = (key, True, version)
+                    upper = (key, True, version)
+                    continue
+
+                key = self._version_key(version)
+                if operator in (">", ">="):
+                    inclusive = operator == ">="
+                    if lower is None or key > lower[0] or (key == lower[0] and inclusive and not lower[1]):
+                        lower = (key, inclusive, version)
+                elif operator in ("<", "<="):
+                    inclusive = operator == "<="
+                    if upper is None or key < upper[0] or (key == upper[0] and inclusive and not upper[1]):
+                        upper = (key, inclusive, version)
+                elif operator == "~=":
+                    # ~=1.4 means >=1.4 and <2.0 (coarse handling)
+                    lower = (key, True, version)
+                    major = list(key)
+                    if major:
+                        major[0] += 1
+                        upper_key = tuple([major[0]])
+                        upper = (upper_key, False, f"{major[0]}")
+
+        return {
+            "lower": lower,
+            "upper": upper,
+            "pins": pins,
+        }
+
+    def _constraints_conflict(self, constraints: list[str]) -> bool:
+        """Heuristic conflict check for constraints collected for one package."""
+        if not constraints:
+            return False
+
+        summary = self._summarize_constraint_bounds(constraints)
+        pins: set[str] = summary["pins"]  # type: ignore[assignment]
+        lower = summary["lower"]
+        upper = summary["upper"]
+
+        if len(pins) > 1:
+            return True
+
+        if pins:
+            pinned = next(iter(pins))
+            pinned_key = self._version_key(pinned)
+            if lower and (pinned_key < lower[0] or (pinned_key == lower[0] and not lower[1])):
+                return True
+            if upper and (pinned_key > upper[0] or (pinned_key == upper[0] and not upper[1])):
+                return True
+            return False
+
+        if lower and upper:
+            if lower[0] > upper[0]:
+                return True
+            if lower[0] == upper[0] and (not lower[1] or not upper[1]):
+                return True
+
+        return False
 
     def _extract_dependencies_from_output(self, output: str) -> list[Dependency]:
         """Extract dependency entries from different manager outputs."""
@@ -506,10 +644,34 @@ class DependencyResolver:
             if not success:
                 continue
 
+            if self.package_manager == LinuxPackageManager.APT:
+                apt_fields = self._parse_control_style_fields(
+                    stdout,
+                    {"conflicts"},
+                )
+                for value in apt_fields:
+                    conflicts.update(self._extract_names_from_relation_string(value))
+
+            elif self.package_manager == LinuxPackageManager.PACMAN:
+                pacman_fields = self._parse_control_style_fields(
+                    stdout,
+                    {"conflicts with", "conflicts", "replaces"},
+                )
+                for value in pacman_fields:
+                    conflicts.update(self._extract_names_from_relation_string(value))
+
+            elif self.package_manager == LinuxPackageManager.ZYPPER:
+                zypper_fields = self._parse_control_style_fields(stdout, {"conflicts"})
+                for value in zypper_fields:
+                    conflicts.update(self._extract_names_from_relation_string(value))
+
             for line in stdout.splitlines():
                 text = line.strip()
                 lowered = text.lower()
-                if lowered.startswith("conflicts:") or "conflicts with" in lowered:
+                if (
+                    lowered.startswith("conflicts:")
+                    or "conflicts with" in lowered
+                ):
                     candidate = text.split(":", 1)[1].strip() if ":" in text else text
                     for part in re.split(r"[,|]", candidate):
                         name = self._normalize_dependency_name(part)
@@ -522,32 +684,37 @@ class DependencyResolver:
         self, package_name: str, dependencies: list[Dependency]
     ) -> tuple[list[tuple[str, str]], str]:
         """Detect conflicts using metadata first, with heuristic fallback."""
-        conflicts: list[tuple[str, str]] = []
+        conflicts: set[tuple[str, str]] = set()
+        install_candidates = {dep.name for dep in dependencies if not dep.is_satisfied} | {package_name}
 
         declared_conflicts = self.get_declared_conflicts(package_name)
         for conflicting in declared_conflicts:
-            if self.is_package_installed(conflicting):
-                pair = (package_name, conflicting)
-                if pair not in conflicts:
-                    conflicts.append(pair)
+            if self.is_package_installed(conflicting) or conflicting in install_candidates:
+                conflicts.add((package_name, conflicting))
+
+        # Also detect conflicts declared by dependencies that will be newly installed.
+        for dep_name in install_candidates:
+            if dep_name == package_name:
+                continue
+            for conflicting in self.get_declared_conflicts(dep_name):
+                if self.is_package_installed(conflicting) or conflicting in install_candidates:
+                    conflicts.add((dep_name, conflicting))
 
         if conflicts:
-            return conflicts, "metadata"
+            return sorted(conflicts), "metadata"
 
         # Fallback to known conflict map only when metadata did not yield results.
-        dep_names = {dep.name for dep in dependencies}
-        check_names = dep_names | {package_name}
+        check_names = install_candidates
+        fallback_conflicts: set[tuple[str, str]] = set()
 
         for dep_name in check_names:
             if dep_name in self.KNOWN_CONFLICTS:
                 for conflicting in self.KNOWN_CONFLICTS[dep_name]:
                     if conflicting in check_names or self.is_package_installed(conflicting):
-                        pair = (dep_name, conflicting)
-                        if pair not in conflicts:
-                            conflicts.append(pair)
+                        fallback_conflicts.add((dep_name, conflicting))
 
-        if conflicts:
-            return conflicts, "heuristic"
+        if fallback_conflicts:
+            return sorted(fallback_conflicts), "heuristic"
 
         return [], "metadata"
 
@@ -708,13 +875,353 @@ class DependencyResolver:
 
         logger.info(f"Dependency graph exported to {filepath}")
 
+    def _collect_python_constraints(self, project_dir: Path) -> dict[str, list[dict[str, str]]]:
+        constraints: dict[str, list[dict[str, str]]] = defaultdict(list)
+
+        req_files = sorted(project_dir.glob("requirements*.txt"))
+        for req_file in req_files:
+            try:
+                lines = req_file.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+
+            for line in lines:
+                text = line.strip()
+                if not text or text.startswith("#") or text.startswith(("-r", "--")):
+                    continue
+
+                if Requirement:
+                    try:
+                        req = Requirement(text)
+                        constraints[req.name.lower()].append(
+                            {
+                                "constraint": str(req.specifier) or "*",
+                                "source": str(req_file.name),
+                            }
+                        )
+                        continue
+                    except Exception:
+                        pass
+
+                fallback_name = re.split(r"[<>=!~\[]", text, maxsplit=1)[0].strip().lower()
+                fallback_constraint = text[len(fallback_name):].strip() if fallback_name else "*"
+                if fallback_name:
+                    constraints[fallback_name].append(
+                        {
+                            "constraint": fallback_constraint or "*",
+                            "source": str(req_file.name),
+                        }
+                    )
+
+        pyproject = project_dir / "pyproject.toml"
+        if pyproject.exists() and tomllib is not None:
+            try:
+                data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+
+            project_data = data.get("project", {}) if isinstance(data, dict) else {}
+            deps = project_data.get("dependencies", []) if isinstance(project_data, dict) else []
+            for item in deps:
+                if not isinstance(item, str):
+                    continue
+                if Requirement:
+                    try:
+                        req = Requirement(item)
+                        constraints[req.name.lower()].append(
+                            {
+                                "constraint": str(req.specifier) or "*",
+                                "source": "pyproject.toml:project.dependencies",
+                            }
+                        )
+                        continue
+                    except Exception:
+                        pass
+
+                fallback_name = re.split(r"[<>=!~\[]", item, maxsplit=1)[0].strip().lower()
+                fallback_constraint = item[len(fallback_name):].strip() if fallback_name else "*"
+                if fallback_name:
+                    constraints[fallback_name].append(
+                        {
+                            "constraint": fallback_constraint or "*",
+                            "source": "pyproject.toml:project.dependencies",
+                        }
+                    )
+
+        return constraints
+
+    def analyze_python_project_conflicts(self, project_path: str = ".") -> dict:
+        """Analyze Python package constraints and pip resolver output."""
+        project_dir = Path(project_path).resolve()
+        constraints = self._collect_python_constraints(project_dir)
+
+        conflicts: list[dict[str, object]] = []
+        for package, entries in sorted(constraints.items()):
+            raw_constraints = [entry["constraint"] for entry in entries]
+            if len(raw_constraints) <= 1:
+                continue
+            if self._constraints_conflict(raw_constraints):
+                conflicts.append(
+                    {
+                        "package": package,
+                        "constraints": raw_constraints,
+                        "sources": [entry["source"] for entry in entries],
+                        "reason": "Incompatible Python version constraints",
+                    }
+                )
+
+        pip_check_cmd = [sys.executable, "-m", "pip", "check"]
+        pip_check_success, pip_check_stdout, pip_check_stderr = self._run_command(pip_check_cmd)
+        pip_check_issues = []
+        for line in pip_check_stdout.splitlines():
+            text = line.strip()
+            if text and "No broken requirements found" not in text:
+                pip_check_issues.append(text)
+
+        resolver_commands = [
+            f"{sys.executable} -m pip check",
+            f"{sys.executable} -m pip install --upgrade pip setuptools wheel",
+        ]
+        default_req = project_dir / "requirements.txt"
+        if default_req.exists():
+            resolver_commands.append(f"{sys.executable} -m pip install -r {default_req}")
+
+        return {
+            "ecosystem": PackageEcosystem.PYTHON.value,
+            "project_path": str(project_dir),
+            "constraints_analyzed": sum(len(values) for values in constraints.values()),
+            "conflicts": conflicts,
+            "runtime_issues": pip_check_issues,
+            "pip_check_ok": pip_check_success and not pip_check_issues,
+            "resolution_commands": resolver_commands,
+            "safe_to_auto_apply": len(conflicts) == 0,
+            "error": pip_check_stderr.strip() if (not pip_check_success and pip_check_stderr) else "",
+        }
+
+    def analyze_npm_project_conflicts(self, project_path: str = ".") -> dict:
+        """Analyze npm constraints from package.json files."""
+        project_dir = Path(project_path).resolve()
+        package_json = project_dir / "package.json"
+        if not package_json.exists():
+            return {
+                "ecosystem": PackageEcosystem.NPM.value,
+                "project_path": str(project_dir),
+                "found": False,
+                "conflicts": [],
+                "resolution_commands": [],
+                "safe_to_auto_apply": True,
+            }
+
+        try:
+            data = json.loads(package_json.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return {
+                "ecosystem": PackageEcosystem.NPM.value,
+                "project_path": str(project_dir),
+                "found": True,
+                "conflicts": [],
+                "resolution_commands": ["npm install"],
+                "safe_to_auto_apply": False,
+                "error": str(exc),
+            }
+
+        constraints: dict[str, list[str]] = defaultdict(list)
+        sources = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]
+        for section in sources:
+            section_data = data.get(section, {})
+            if not isinstance(section_data, dict):
+                continue
+            for name, version in section_data.items():
+                if isinstance(version, str):
+                    constraints[name.lower()].append(version)
+
+        conflicts: list[dict[str, object]] = []
+        for package, specs in sorted(constraints.items()):
+            if len(specs) > 1 and self._constraints_conflict(specs):
+                conflicts.append(
+                    {
+                        "package": package,
+                        "constraints": specs,
+                        "reason": "Incompatible npm semver constraints across sections",
+                    }
+                )
+
+        resolution_commands = ["npm install", "npm ls --all"]
+        return {
+            "ecosystem": PackageEcosystem.NPM.value,
+            "project_path": str(project_dir),
+            "found": True,
+            "conflicts": conflicts,
+            "resolution_commands": resolution_commands,
+            "safe_to_auto_apply": len(conflicts) == 0,
+        }
+
+    def analyze_cargo_project_conflicts(self, project_path: str = ".") -> dict:
+        """Analyze Cargo constraints from Cargo.toml."""
+        project_dir = Path(project_path).resolve()
+        cargo_toml = project_dir / "Cargo.toml"
+        if not cargo_toml.exists() or tomllib is None:
+            return {
+                "ecosystem": PackageEcosystem.CARGO.value,
+                "project_path": str(project_dir),
+                "found": cargo_toml.exists(),
+                "conflicts": [],
+                "resolution_commands": [],
+                "safe_to_auto_apply": True,
+            }
+
+        try:
+            data = tomllib.loads(cargo_toml.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return {
+                "ecosystem": PackageEcosystem.CARGO.value,
+                "project_path": str(project_dir),
+                "found": True,
+                "conflicts": [],
+                "resolution_commands": ["cargo update", "cargo tree -d"],
+                "safe_to_auto_apply": False,
+                "error": str(exc),
+            }
+
+        constraints: dict[str, list[str]] = defaultdict(list)
+        for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+            section_data = data.get(section, {})
+            if not isinstance(section_data, dict):
+                continue
+            for name, value in section_data.items():
+                if isinstance(value, str):
+                    constraints[name.lower()].append(value)
+                elif isinstance(value, dict) and isinstance(value.get("version"), str):
+                    constraints[name.lower()].append(value["version"])
+
+        conflicts: list[dict[str, object]] = []
+        for package, specs in sorted(constraints.items()):
+            if len(specs) > 1 and self._constraints_conflict(specs):
+                conflicts.append(
+                    {
+                        "package": package,
+                        "constraints": specs,
+                        "reason": "Incompatible Cargo version constraints across sections",
+                    }
+                )
+
+        return {
+            "ecosystem": PackageEcosystem.CARGO.value,
+            "project_path": str(project_dir),
+            "found": True,
+            "conflicts": conflicts,
+            "resolution_commands": ["cargo update", "cargo tree -d"],
+            "safe_to_auto_apply": len(conflicts) == 0,
+        }
+
+    def analyze_ruby_project_conflicts(self, project_path: str = ".") -> dict:
+        """Analyze Gemfile constraints for likely Ruby dependency conflicts."""
+        project_dir = Path(project_path).resolve()
+        gemfile = project_dir / "Gemfile"
+        if not gemfile.exists():
+            return {
+                "ecosystem": PackageEcosystem.RUBY.value,
+                "project_path": str(project_dir),
+                "found": False,
+                "conflicts": [],
+                "resolution_commands": [],
+                "safe_to_auto_apply": True,
+            }
+
+        constraints: dict[str, list[str]] = defaultdict(list)
+        try:
+            for line in gemfile.read_text(encoding="utf-8").splitlines():
+                text = line.strip()
+                if not text or text.startswith("#") or not text.startswith("gem "):
+                    continue
+
+                match = re.match(r"gem\s+[\"']([^\"']+)[\"']\s*(.*)", text)
+                if not match:
+                    continue
+                name = match.group(1).lower()
+                tail = match.group(2)
+                specs = re.findall(r"[\"']([^\"']+)[\"']", tail)
+                constraints[name].extend(specs or ["*"])
+        except OSError as exc:
+            return {
+                "ecosystem": PackageEcosystem.RUBY.value,
+                "project_path": str(project_dir),
+                "found": True,
+                "conflicts": [],
+                "resolution_commands": ["bundle check", "bundle update"],
+                "safe_to_auto_apply": False,
+                "error": str(exc),
+            }
+
+        conflicts: list[dict[str, object]] = []
+        for package, specs in sorted(constraints.items()):
+            if len(specs) > 1 and self._constraints_conflict(specs):
+                conflicts.append(
+                    {
+                        "package": package,
+                        "constraints": specs,
+                        "reason": "Incompatible Gem constraints",
+                    }
+                )
+
+        return {
+            "ecosystem": PackageEcosystem.RUBY.value,
+            "project_path": str(project_dir),
+            "found": True,
+            "conflicts": conflicts,
+            "resolution_commands": ["bundle check", "bundle update"],
+            "safe_to_auto_apply": len(conflicts) == 0,
+        }
+
+    def analyze_project_conflicts(
+        self,
+        project_path: str = ".",
+        ecosystem: PackageEcosystem = PackageEcosystem.ALL,
+    ) -> dict:
+        """Universal conflict analysis across language ecosystems."""
+        selected = ecosystem.value if isinstance(ecosystem, PackageEcosystem) else str(ecosystem)
+        analyses: dict[str, dict] = {}
+
+        if selected in (PackageEcosystem.ALL.value, PackageEcosystem.PYTHON.value):
+            analyses[PackageEcosystem.PYTHON.value] = self.analyze_python_project_conflicts(project_path)
+
+        if selected in (PackageEcosystem.ALL.value, PackageEcosystem.NPM.value):
+            analyses[PackageEcosystem.NPM.value] = self.analyze_npm_project_conflicts(project_path)
+
+        if selected in (PackageEcosystem.ALL.value, PackageEcosystem.CARGO.value):
+            analyses[PackageEcosystem.CARGO.value] = self.analyze_cargo_project_conflicts(project_path)
+
+        if selected in (PackageEcosystem.ALL.value, PackageEcosystem.RUBY.value):
+            analyses[PackageEcosystem.RUBY.value] = self.analyze_ruby_project_conflicts(project_path)
+
+        total_conflicts = sum(len(result.get("conflicts", [])) for result in analyses.values())
+
+        return {
+            "ecosystem": selected,
+            "project_path": str(Path(project_path).resolve()),
+            "total_conflicts": total_conflicts,
+            "analyses": analyses,
+            "safe_to_auto_apply": total_conflicts == 0,
+        }
+
 
 # CLI Interface
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Resolve Linux package dependencies")
-    parser.add_argument("package", help="Package name to analyze")
+    parser.add_argument("package", nargs="?", help="Package name to analyze")
+    parser.add_argument(
+        "--ecosystem",
+        choices=[e.value for e in PackageEcosystem],
+        default=PackageEcosystem.LINUX.value,
+        help="Dependency ecosystem to analyze",
+    )
+    parser.add_argument(
+        "--project-path",
+        default=".",
+        help="Project path for non-linux ecosystem analysis",
+    )
     parser.add_argument("--tree", action="store_true", help="Show dependency tree")
     parser.add_argument("--plan", action="store_true", help="Generate installation plan")
     parser.add_argument(
@@ -733,6 +1240,17 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     resolver = DependencyResolver()
+
+    if args.ecosystem != PackageEcosystem.LINUX.value:
+        analysis = resolver.analyze_project_conflicts(
+            project_path=args.project_path,
+            ecosystem=PackageEcosystem(args.ecosystem),
+        )
+        print(json.dumps(analysis, indent=2))
+        raise SystemExit(0)
+
+    if not args.package:
+        parser.error("package is required for linux ecosystem analysis")
 
     if args.tree:
         print(f"\n Dependency tree for {args.package}:")

@@ -809,7 +809,7 @@ class HelixCLI:
 
     def resolve(self, args: argparse.Namespace) -> int:
         """Resolve dependency conflicts for Linux packages or parse resolver errors."""
-        from helix.dependency_resolver import DependencyResolver
+        from helix.dependency_resolver import DependencyResolver, PackageEcosystem
         from helix.error_parser import ErrorParser
 
         if getattr(args, "error", None) or getattr(args, "error_file", None):
@@ -843,11 +843,53 @@ class HelixCLI:
             parser.print_analysis(analysis)
             return 0
 
+        resolver = DependencyResolver()
+
+        ecosystem = getattr(args, "ecosystem", PackageEcosystem.LINUX.value)
+        if ecosystem != PackageEcosystem.LINUX.value:
+            project_path = getattr(args, "project_path", ".")
+            universal_plan = resolver.analyze_project_conflicts(
+                project_path=project_path,
+                ecosystem=PackageEcosystem(ecosystem),
+            )
+
+            if args.json:
+                print(json.dumps(universal_plan, indent=2))
+                return 0
+
+            print("\n🧩 Universal dependency conflict analysis")
+            print("=" * 60)
+            print(f"Ecosystem: {universal_plan['ecosystem']}")
+            print(f"Project path: {universal_plan['project_path']}")
+            print(f"Total conflicts: {universal_plan['total_conflicts']}")
+
+            for name, analysis in universal_plan["analyses"].items():
+                print(f"\n{name.upper()}:")
+                print(f"  Conflicts: {len(analysis.get('conflicts', []))}")
+                if analysis.get("runtime_issues"):
+                    for issue in analysis["runtime_issues"]:
+                        print(f"  Runtime issue: {issue}")
+                for conflict in analysis.get("conflicts", []):
+                    print(
+                        f"  - {conflict.get('package')}: {', '.join(conflict.get('constraints', []))}"
+                    )
+
+                commands = analysis.get("resolution_commands", [])
+                if commands:
+                    print("  Suggested commands:")
+                    for cmd in commands:
+                        print(f"    {cmd}")
+
+            if universal_plan["safe_to_auto_apply"]:
+                cx_print("No manifest-level conflicts detected.", "success")
+                return 0
+
+            self._print_error("Conflicts detected. Review the suggested commands above.")
+            return 1
+
         if not getattr(args, "package", None):
             self._print_error("Please provide a package name or --error/--error-file input")
             return 1
-
-        resolver = DependencyResolver()
 
         if args.tree:
             print(f"\n📦 Dependency tree for {args.package}:")
@@ -1845,9 +1887,20 @@ def main():
     # ── Resolve command ──
     resolve_parser = subparsers.add_parser(
         "resolve",
-        help="Resolve Linux dependency conflicts for a package",
+        help="Resolve dependency conflicts (linux/python/npm/cargo/ruby)",
     )
     resolve_parser.add_argument("package", nargs="?", help="Package name to resolve")
+    resolve_parser.add_argument(
+        "--ecosystem",
+        choices=["linux", "python", "npm", "cargo", "ruby", "all"],
+        default="linux",
+        help="Dependency ecosystem to analyze",
+    )
+    resolve_parser.add_argument(
+        "--project-path",
+        default=".",
+        help="Project path for non-linux ecosystem analysis",
+    )
     resolve_parser.add_argument(
         "--tree",
         action="store_true",

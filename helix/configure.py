@@ -101,7 +101,7 @@ KNOWN_SERVICES: dict[str, tuple[str, str]] = {
 }
 
 
-# ─── ProjectAnalyzer ──────────────────────────────────────────────────────────
+# ─── ProjectAnalyzer ───
 
 class ProjectAnalyzer:
     """Scans the project directory and system to build ProjectContext."""
@@ -1622,7 +1622,7 @@ Then, after receiving answers, output:
         return None
 
 
-# ─── ProjectConfigurator ──────────────────────────────────────────────────────
+# ─── ProjectConfigurator ───
 
 class ProjectConfigurator:
     """Orchestrates the full configure pipeline."""
@@ -1649,11 +1649,11 @@ class ProjectConfigurator:
                 cx_print(f"Invalid type '{only}'. Valid types: {', '.join(sorted(valid_types))}", "error")
                 return 1
 
-        # ── Explicit mode: user named a specific service ──────────────────
+        # ── Explicit mode: user named a specific service ──
         if target:
             return self._run_explicit(target, dry_run, force)
 
-        # ── Auto-detect mode ──────────────────────────────────────────────
+        # ── Auto-detect mode ───
         cx_print(f"Scanning: {project_dir}", "info")
 
         # Stage 1: analyze
