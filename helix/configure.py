@@ -1717,7 +1717,10 @@ class ProjectConfigurator:
         else:
             config_path = f"/etc/{target}/{target}.conf"
 
-        already_exists = Path(config_path).exists()
+        try:
+            already_exists = Path(config_path).exists()
+        except PermissionError:
+            already_exists = False
 
         if template_content and not already_exists:
             specs = [ConfigFileSpec(
@@ -1985,13 +1988,64 @@ class ProjectConfigurator:
         cx_print("Configuration complete.", "success")
         return 0
 
+    def _write_with_sudo(self, target: Path, content: str) -> None:
+        """Write a file to a system path by prompting for a sudo password once."""
+        import getpass
+        from helix.branding import cx_print
+
+        cx_print(f"Writing to {target} requires elevated privileges.", "warning")
+
+        # Prompt for password once — hidden input, no echo
+        try:
+            password = getpass.getpass(prompt=f"[sudo] password for {os.getlogin()}: ")
+        except (KeyboardInterrupt, EOFError):
+            raise PermissionError("Sudo password entry cancelled.")
+
+        pw_bytes = (password + "\n").encode()
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".conf", delete=False, encoding="utf-8") as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+
+        try:
+            # Validate password + create parent dir in one sudo call
+            mkdir_result = subprocess.run(
+                ["sudo", "-S", "mkdir", "-p", str(target.parent)],
+                input=pw_bytes,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            if mkdir_result.returncode != 0:
+                raise PermissionError("Incorrect sudo password or insufficient privileges.")
+
+            # Use sudo cp from temp file — avoids stdin conflict with tee
+            cp_result = subprocess.run(
+                ["sudo", "-n", "cp", tmp_path, str(target)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if cp_result.returncode != 0:
+                raise PermissionError(f"Failed to write {target} even with sudo.")
+
+            cx_print(f"Written with sudo: {target}", "success")
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
     def _write_single(self, spec: ConfigFileSpec, project_dir: Path) -> None:
         """Write a single config file. Raises OSError / PermissionError on failure."""
-        # Absolute paths (system service configs) — write directly
+        # Absolute paths (system service configs) — try direct write, fall back to sudo
         if spec.filename.startswith("/"):
             target = Path(spec.filename)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(spec.content, encoding="utf-8")
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(spec.content, encoding="utf-8")
+            except PermissionError:
+                self._write_with_sudo(target, spec.content)
         else:
             # Relative paths — write inside project dir
             target = project_dir / spec.filename
